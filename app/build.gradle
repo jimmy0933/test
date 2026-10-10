@@ -1,0 +1,11 @@
+plugins { id 'com.android.application' }
+android {
+ namespace 'tw.mediaorganizer'
+ compileSdk 35
+ defaultConfig { applicationId 'tw.mediaorganizer'; minSdk 30; targetSdk 35; versionCode 1; versionName '1.0' }
+ compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+ buildFeatures { buildConfig false }
+ signingConfigs { localTesting { storeFile file('../signing/local-testing.p12'); storePassword 'mediaorganizer-dev'; keyAlias 'mediaorganizer'; keyPassword 'mediaorganizer-dev' } }
+ buildTypes { debug { signingConfig signingConfigs.localTesting }; release { signingConfig signingConfigs.localTesting; minifyEnabled false } }
+}
+dependencies { implementation 'org.tensorflow:tensorflow-lite:2.16.1' }
