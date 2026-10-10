@@ -15,20 +15,24 @@ final class Scanner {
  }
  static final class Group {String title;List<Item> items=new ArrayList<>();float[] person;File face;Group(String t){title=t;}}
  static final class Result {List<Item> all=new ArrayList<>();List<Group> exact=new ArrayList<>(),similar=new ArrayList<>(),people=new ArrayList<>();int unreadable,faceFailures;String faceError="";}
- interface Progress {void report(String s);boolean cancelled();}
- final Context context;final Progress progress;final boolean people;final int bits;final double faceThreshold;
- Scanner(Context c,Progress p,boolean f,int b,double t){context=c;progress=p;people=f;bits=b;faceThreshold=t;}
+ interface Progress {void report(String s);boolean cancelled();void onPartialResult(Result partial);}
+ final Context context;final Progress progress;final boolean people;final int bits;final double faceThreshold;final String sourceFilter;
+ Scanner(Context c,Progress p,boolean f,int b,double t,String src){context=c;progress=p;people=f;bits=b;faceThreshold=t;sourceFilter=src!=null?src:"";}
  private void check()throws InterruptedException{if(progress.cancelled()||Thread.currentThread().isInterrupted())throw new InterruptedException();}
  Result run()throws Exception{
   Result result=new Result();query(result,false);query(result,true);check();
+  if(progress!=null)progress.onPartialResult(result);
   Map<String,List<Item>> sizes=new HashMap<>();for(Item item:result.all)sizes.computeIfAbsent((item.video?"v":"p")+item.size,k->new ArrayList<>()).add(item);
   Map<String,Group> hashes=new LinkedHashMap<>();int i=0;
   for(List<Item> candidates:sizes.values())if(candidates.size()>1)for(Item item:candidates){check();progress.report("檔案雜湊核對 · "+(++i)+" 個候選");try{String hash=sha(item.uri);Group group=hashes.computeIfAbsent((item.video?"v":"p")+hash,k->new Group("完全重複 · SHA-256"));group.items.add(item);}catch(IOException e){result.unreadable++;}}
   for(Group group:hashes.values())if(group.items.size()>1)result.exact.add(group);
+  if(progress!=null)progress.onPartialResult(result);
+
   FaceEngine engine=null;if(people)try{engine=new FaceEngine(context);}catch(Exception|LinkageError e){result.faceError="人物模型無法啟動："+e.getClass().getSimpleName();}
   try{for(i=0;i<result.all.size();i++){
    check();Item item=result.all.get(i);progress.report("分析 "+(i+1)+" / "+result.all.size()+" · "+item.name);
    try{analyze(item,engine,result);}catch(Exception e){result.unreadable++;}
+   if(i%5==0&&progress!=null)progress.onPartialResult(result);
   }}finally{if(engine!=null)engine.close();}
   progress.report("建立相似群組…");List<Group> representatives=new ArrayList<>();
   for(Item item:result.all){check();if(item.signatures==null)continue;Group found=null;
@@ -41,12 +45,20 @@ final class Scanner {
    if(best==null){best=new Group("疑似同一人物 · 請人工確認");best.person=f.vector;best.face=f.thumbnail;result.people.add(best);}
    if(!best.items.contains(item))best.items.add(item);if(f.crop!=null)f.crop.recycle();
   }item.faces.clear();}
-  result.people.removeIf(g->g.items.size()<2);return result;
+  result.people.removeIf(g->g.items.size()<2);
+  if(progress!=null)progress.onPartialResult(result);
+  return result;
  }
  private void query(Result result,boolean video)throws InterruptedException{
   Uri base=video?MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY):MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
   String[] columns={"_id","_display_name","mime_type","_size","relative_path",video?"duration":"width"};
-  try(Cursor cursor=context.getContentResolver().query(base,columns,"_size > 0",null,"date_added DESC")){
+  String selection="_size > 0";
+  String[] selectionArgs=null;
+  if(!sourceFilter.isEmpty()){
+   selection+=" AND relative_path LIKE ?";
+   selectionArgs=new String[]{sourceFilter+"%"};
+  }
+  try(Cursor cursor=context.getContentResolver().query(base,columns,selection,selectionArgs,"date_added DESC")){
    if(cursor==null)return;while(cursor.moveToNext()){check();Item item=new Item();item.uri=ContentUris.withAppendedId(base,cursor.getLong(0));item.name=cursor.getString(1);item.mime=cursor.getString(2);item.size=cursor.getLong(3);item.path=cursor.getString(4);item.video=video;item.duration=video?cursor.getLong(5):0;result.all.add(item);}
   }catch(SecurityException e){progress.report((video?"影片":"圖片")+"讀取權限不足");}
  }
