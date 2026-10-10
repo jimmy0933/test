@@ -110,11 +110,20 @@ public class MainActivity extends Activity {
 
  private boolean permission(String p){return checkSelfPermission(p)==PackageManager.PERMISSION_GRANTED;}
  private void requestScan(){
-  if(busy)return;if(Build.VERSION.SDK_INT>=33){if(!permission("android.permission.READ_MEDIA_IMAGES")||!permission("android.permission.READ_MEDIA_VIDEO")){ArrayList<String> perms=new ArrayList<>(Arrays.asList("android.permission.READ_MEDIA_IMAGES","android.permission.READ_MEDIA_VIDEO"));if(Build.VERSION.SDK_INT>=34)perms.add("android.permission.READ_MEDIA_VISUAL_USER_SELECTED");requestPermissions(perms.toArray(new String[0]),41);return;}}
+  if(busy||fileBusy)return;int mediaType=mediaTypeSpinner.getSelectedItemPosition();
+  if(Build.VERSION.SDK_INT>=33){
+   ArrayList<String> perms=new ArrayList<>();
+   if(mediaType!=2&&!permission("android.permission.READ_MEDIA_IMAGES"))perms.add("android.permission.READ_MEDIA_IMAGES");
+   if(mediaType!=1&&!permission("android.permission.READ_MEDIA_VIDEO"))perms.add("android.permission.READ_MEDIA_VIDEO");
+   if(!perms.isEmpty()){
+    if(Build.VERSION.SDK_INT>=34)perms.add("android.permission.READ_MEDIA_VISUAL_USER_SELECTED");
+    requestPermissions(perms.toArray(new String[0]),41);return;
+   }
+  }
   else if(!permission("android.permission.READ_EXTERNAL_STORAGE")){requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"},41);return;}startScan();
  }
  public void onRequestPermissionsResult(int code,String[] perms,int[] grants){super.onRequestPermissionsResult(code,perms,grants);if(code==41){boolean granted=false;for(int g:grants)if(g==PackageManager.PERMISSION_GRANTED)granted=true;if(granted)startScan();else status.setText("尚未取得媒體權限；請重新掃描並授權。");}}
- private void setBusy(boolean b){busy=b;scan.setEnabled(!b);cancel.setEnabled(b);people.setEnabled(!b);strictness.setEnabled(!b);mediaTypeSpinner.setEnabled(!b);move.setEnabled(!selected.isEmpty()&&!fileBusy);deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}
+ private void setBusy(boolean b){busy=b;scan.setEnabled(!b&&!fileBusy);cancel.setEnabled(b);people.setEnabled(!b);strictness.setEnabled(!b);mediaTypeSpinner.setEnabled(!b);move.setEnabled(!selected.isEmpty()&&!fileBusy);deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}
  private void startScan(){
   selected.clear();result=new Scanner.Result();render();setBusy(true);cancelled=false;status.setText("掃描中，可即時查看結果與進行處理…");final boolean faces=people.isChecked();final int setting=strictness.getSelectedItemPosition();final int mediaType=mediaTypeSpinner.getSelectedItemPosition();final Set<String> snapshotFilters=new HashSet<>(sourceFilters);lastProgress=0;
   scanWorker.execute(()->{try{clearThumbs();
@@ -124,7 +133,7 @@ public class MainActivity extends Activity {
      public void onPartialResult(Scanner.Result partial){ui(()->{result=partial;render();});}
     },faces,new int[]{5,8,12}[setting],new double[]{.72,.65,.58}[setting],snapshotFilters,mediaType);
     Scanner.Result scanned=scanner.run();
-    ui(()->{result=scanned;saveScanCache(scanned);setBusy(false);boolean full=Build.VERSION.SDK_INT<33||permission("android.permission.READ_MEDIA_IMAGES")&&permission("android.permission.READ_MEDIA_VIDEO");String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";if(!sourceFilters.isEmpty())summary+=" (來源: 已選 "+sourceFilters.size()+" 個資料夾)";if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;status.setText(summary);render();});
+    ui(()->{result=scanned;saveScanCache(scanned);setBusy(false);boolean full=Build.VERSION.SDK_INT<33||((mediaType!=2?permission("android.permission.READ_MEDIA_IMAGES"):true)&&(mediaType!=1?permission("android.permission.READ_MEDIA_VIDEO"):true));String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";if(!sourceFilters.isEmpty())summary+=" (來源: 已選 "+sourceFilters.size()+" 個資料夾)";if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;status.setText(summary);render();});
    }catch(InterruptedException e){ui(()->{saveScanCache(result);setBusy(false);status.setText("掃描已停止，已呈現部分結果與記錄。");render();});}catch(Exception|LinkageError e){ui(()->{setBusy(false);status.setText("掃描失敗："+e.getClass().getSimpleName()+" · "+e.getMessage());});}});
  }
  private void ui(Runnable r){if(!dead)runOnUiThread(()->{if(!dead)r.run();});}
@@ -143,7 +152,7 @@ public class MainActivity extends Activity {
  }
  private Bitmap smallThumb(File file){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=2;return BitmapFactory.decodeFile(file.getPath(),options);}
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
- private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}
+ private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(scan!=null)scan.setEnabled(!busy&&!fileBusy);if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}
  private void preview(Scanner.Item item){try{Intent intent=new Intent(Intent.ACTION_VIEW);intent.setDataAndType(item.uri,item.mime!=null?item.mime:item.video?"video/*":"image/*");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(intent);}catch(ActivityNotFoundException e){new AlertDialog.Builder(this).setMessage("手機沒有可開啟此媒體的應用程式。").setPositiveButton("確定",null).show();}}
  private String validateDestination(String input){
   if(input==null)input="";input=input.trim();
@@ -195,10 +204,20 @@ public class MainActivity extends Activity {
    startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
   }catch(Exception e){status.setText("無法取得刪除授權："+e.getMessage());pendingDeletes=null;fileBusy=false;updateSelection();}
  }
- private void requestWrite(){if(pending==null||pending.isEmpty()){status.setText("檔案已在目的資料夾，沒有需要移動的項目。");pending=null;fileBusy=false;updateSelection();return;}
-  try{ArrayList<Uri> uris=new ArrayList<>();for(int i=0;i<Math.min(100,pending.size());i++)uris.add(pending.get(i).uri);startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),uris).getIntentSender(),51,null,0,0,0);}catch(Exception e){status.setText("無法取得移動授權："+e.getMessage());pending=null;fileBusy=false;updateSelection();}}
+ private void finishMoveOperation(){
+  pending=null;fileBusy=false;
+  if(!undoing){
+   if(operationMoved==0)restoreJournalBackup();else clearJournalBackup();
+   saveScanCache(result);
+  }else{
+   result=null;selected.clear();cacheFile().delete();
+  }
+  updateSelection();
+ }
+ private void requestWrite(){if(pending==null||pending.isEmpty()){status.setText("檔案已在目的資料夾，沒有需要移動的項目。");finishMoveOperation();return;}
+  try{ArrayList<Uri> uris=new ArrayList<>();for(int i=0;i<Math.min(100,pending.size());i++)uris.add(pending.get(i).uri);startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),uris).getIntentSender(),51,null,0,0,0);}catch(Exception e){status.setText("無法取得移動授權："+e.getMessage());finishMoveOperation();}}
  public void onActivityResult(int request,int response,Intent data){super.onActivityResult(request,response,data);
-  if(request==51){if(response==RESULT_OK)applyBatch();else{pending=null;fileBusy=false;if(!undoing){if(operationMoved==0)restoreJournalBackup();else clearJournalBackup();}updateSelection();status.setText("此批移動未獲授權，未移動此批檔案。先前成功的批次可復原。");}}
+  if(request==51){if(response==RESULT_OK)applyBatch();else{finishMoveOperation();status.setText("此批移動未獲授權，未移動此批檔案。先前成功的批次可復原。");}}
   else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{pendingDeletes=null;fileBusy=false;updateSelection();status.setText("此批刪除未獲授權。");}}
  }
  private void applyDeleteBatch(){
@@ -229,7 +248,7 @@ public class MainActivity extends Activity {
    }catch(Exception e){failed++;}}
    final int m=moved,f=failed;ui(()->{operationMoved+=m;operationFailed+=f;if(!undoing)for(MoveRecord r:batch)if(r.item!=null&&r.item.removed)selected.remove(r.item);
     if(pending!=null&&!pending.isEmpty()){status.setText("已移動 "+operationMoved+" 個，繼續請求下一批授權…");requestWrite();}
-    else{pending=null;fileBusy=false;if(!undoing){if(operationMoved==0)restoreJournalBackup();else clearJournalBackup();}saveScanCache(result);status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));operationHasSuccess=false;operationMoved=operationFailed=0;if(undoing){result=null;selected.clear();cacheFile().delete();}render();}});
+    else{finishMoveOperation();status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));operationHasSuccess=false;operationMoved=operationFailed=0;render();}});
   });
  }
  private boolean collision(Uri self,String path,String name){try(android.database.Cursor c=getContentResolver().query(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),new String[]{"_id"},"relative_path = ? AND _display_name = ?",new String[]{path,name},null)){if(c!=null)while(c.moveToNext())if(c.getLong(0)!=ContentUris.parseId(self))return true;}return false;}
