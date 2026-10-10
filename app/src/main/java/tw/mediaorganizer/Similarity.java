@@ -17,6 +17,10 @@ public final class Similarity {
   for(int i=0;i<a.length;i++){if(!Float.isFinite(a[i])||!Float.isFinite(b[i]))return -1;dot+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i];}
   return na>1e-12&&nb>1e-12?dot/Math.sqrt(na*nb):-1;
  }
+ public static String escapeLike(String s){
+  if(s==null)return "";
+  return s.replace("\\","\\\\").replace("%","\\%").replace("_","\\_");
+ }
  public static boolean video(Signature[] a,Signature[] b,int bits){
   if(a==null||b==null||a.length<3||b.length<3)return false;
   int n=Math.min(a.length,b.length),matches=0;

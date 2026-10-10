@@ -16,6 +16,8 @@ public class SimilarityTest {
   check(Similarity.cosine(new float[]{1,0},new float[]{0,1})==0,"different embedding directions");
   check(Similarity.cosine(new float[]{0,0},new float[]{0,0})==-1,"zero embeddings rejected");
   check(Similarity.cosine(new float[]{Float.NaN},new float[]{1})==-1,"nonfinite embeddings rejected");
-  check(!Similarity.visual(null,a,5),"unreadable image excluded");System.out.println(checks+" checks passed");
+  check(!Similarity.visual(null,a,5),"unreadable image excluded");
+  check(Similarity.escapeLike("trip_2026%").equals("trip\\_2026\\%"),"SQL LIKE wildcards escaped");
+  System.out.println(checks+" checks passed");
  }
 }

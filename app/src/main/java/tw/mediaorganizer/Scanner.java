@@ -126,7 +126,7 @@ final class Scanner {
    for(String src:sourceFilters){
     if(idx>0)selection.append(" OR ");
     selection.append("relative_path LIKE ? ESCAPE '\\'");
-    selectionArgsList.add(escapeLike(src)+"%");
+    selectionArgsList.add(Similarity.escapeLike(src)+"%");
     idx++;
    }
    selection.append(")");
@@ -135,9 +135,6 @@ final class Scanner {
   try(Cursor cursor=context.getContentResolver().query(base,columns,selection.toString(),selectionArgs,"date_added DESC")){
    if(cursor==null)return;while(cursor.moveToNext()){check();Item item=new Item();item.uri=ContentUris.withAppendedId(base,cursor.getLong(0));item.name=cursor.getString(1);item.mime=cursor.getString(2);item.size=cursor.getLong(3);item.path=cursor.getString(4);item.video=video;item.duration=video?cursor.getLong(5):0;synchronized(result){result.all.add(item);}}
   }catch(SecurityException e){progress.report((video?"影片":"圖片")+"讀取權限不足");}
- }
- private static String escapeLike(String s){
-  return s.replace("\\","\\\\").replace("%","\\%").replace("_","\\_");
  }
  private String sha(Uri uri)throws IOException,InterruptedException,NoSuchAlgorithmException{
   MessageDigest digest=MessageDigest.getInstance("SHA-256");try(InputStream in=context.getContentResolver().openInputStream(uri)){
