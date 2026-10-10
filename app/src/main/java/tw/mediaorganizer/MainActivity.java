@@ -15,7 +15,7 @@ import org.json.*;
 
 public class MainActivity extends Activity {
  private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3;
- private LinearLayout root,list;private TextView status,selection,srcLabel;private CheckBox people;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
+ private LinearLayout root,list;private TextView status,selection,srcLabel;private CheckBox people;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,previewBtn,cancel;
  private final ExecutorService scanWorker=Executors.newSingleThreadExecutor();
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean cancelled,dead,busy,fileBusy;private Scanner.Result result;
@@ -59,10 +59,11 @@ public class MainActivity extends Activity {
   ScrollView scroll=new ScrollView(this);list=new LinearLayout(this);list.setOrientation(1);scroll.addView(list);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
   selection=text("已選 0 個",12);root.addView(selection);
 
-  LinearLayout footer=new LinearLayout(this);move=button("移到此資料夾",this::confirmMove);deleteBtn=button("刪除所選檔",this::confirmDelete);Button clear=button("取消勾選",()->{selected.clear();render();});
+  LinearLayout footer=new LinearLayout(this);move=button("移到此資料夾",this::confirmMove);deleteBtn=button("刪除所選檔",this::confirmDelete);previewBtn=button("預覽所選",this::previewSelected);Button clear=button("取消勾選",()->{selected.clear();render();});
   footer.addView(move,new LinearLayout.LayoutParams(0,dp(46),1));
   footer.addView(deleteBtn,new LinearLayout.LayoutParams(0,dp(46),1));
-  footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
+  footer.addView(previewBtn,new LinearLayout.LayoutParams(0,dp(46),1));
+  footer.addView(clear,new LinearLayout.LayoutParams(dp(80),dp(46)));
   root.addView(footer);
 
   LinearLayout tools=new LinearLayout(this);tools.addView(button("復原上次移動",this::undo),new LinearLayout.LayoutParams(0,dp(42),1));tools.addView(button("說明／清除快取",this::help),new LinearLayout.LayoutParams(0,dp(42),1));root.addView(tools);
@@ -152,8 +153,24 @@ public class MainActivity extends Activity {
  }
  private Bitmap smallThumb(File file){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=2;return BitmapFactory.decodeFile(file.getPath(),options);}
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
- private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(scan!=null)scan.setEnabled(!busy&&!fileBusy);if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}
+ private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));boolean hasSel=!selected.isEmpty();if(scan!=null)scan.setEnabled(!busy&&!fileBusy);if(move!=null)move.setEnabled(hasSel&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(hasSel&&!fileBusy);if(previewBtn!=null)previewBtn.setEnabled(hasSel);}
  private void preview(Scanner.Item item){try{Intent intent=new Intent(Intent.ACTION_VIEW);intent.setDataAndType(item.uri,item.mime!=null?item.mime:item.video?"video/*":"image/*");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(intent);}catch(ActivityNotFoundException e){new AlertDialog.Builder(this).setMessage("手機沒有可開啟此媒體的應用程式。").setPositiveButton("確定",null).show();}}
+ private void previewSelected(){
+  if(selected.isEmpty())return;
+  List<Scanner.Item> items=new ArrayList<>(selected);
+  if(items.size()==1){preview(items.get(0));return;}
+  try{
+   Intent intent=new Intent(Intent.ACTION_VIEW);Scanner.Item first=items.get(0);
+   intent.setDataAndType(first.uri,first.mime!=null?first.mime:first.video?"video/*":"image/*");
+   intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+   ClipData clipData=ClipData.newRawUri("Selected Media",first.uri);
+   for(int i=1;i<items.size();i++)clipData.addItem(new ClipData.Item(items.get(i).uri));
+   intent.setClipData(clipData);
+   startActivity(intent);
+  }catch(ActivityNotFoundException e){
+   new AlertDialog.Builder(this).setMessage("手機沒有可開啟此媒體群組的應用程式。").setPositiveButton("確定",null).show();
+  }
+ }
  private String validateDestination(String input){
   if(input==null)input="";input=input.trim();
   if(input.endsWith("/"))input=input.substring(0,input.length()-1);
@@ -181,28 +198,18 @@ public class MainActivity extends Activity {
  }
  private void promptMoveConfirmation(String folderName){
   String target=validateDestination(folderName);if(target==null)return;ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
-  new AlertDialog.Builder(this).setTitle("確認移動 "+snapshot.size()+" 個檔案").setMessage("目的地："+target+"\n移動後會離開原資料夾；不刪除重複檔。相似與人物分組請先確認。\n同名檔會加上識別碼，不覆蓋既有檔案。\n這次成功的移動會取代上次復原紀錄。").setNegativeButton("取消",null).setPositiveButton("移動",(d,w)->{destination=target;pending=new ArrayList<>();for(Scanner.Item item:snapshot)if(!target.equals(item.path)){MoveRecord r=new MoveRecord();r.uri=item.uri;r.oldPath=item.path;r.oldName=item.name;r.newPath=target;r.newName=item.name;r.item=item;pending.add(r);}undoing=false;isDeleting=false;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;backupJournal();updateSelection();requestWrite();}).show();
+  new AlertDialog.Builder(this).setTitle("確認移動 "+snapshot.size()+" 個檔案").setMessage("目的地："+target+"\n移動後會離開原資料夾；不刪除重複檔。相似與人物分組請先確認。\n同名檔會加上識別碼，不覆蓋既有檔案。\n這次成功的移動會取代上次復原紀錄。").setNegativeButton("取消",null).setPositiveButton("移動",(d,w)->{destination=target;pending=new ArrayList<>();for(Scanner.Item item:snapshot)if(!target.equals(item.path)){MoveRecord r=new MoveRecord();r.uri=item.uri;r.oldPath=item.path;r.oldName=item.name;r.newPath=target;r.newName=item.name;r.item=item;pending.add(r);}undoing=false;isDeleting=false;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;backupJournal();updateSelection();applyBatch();}).show();
  }
  private void confirmDelete(){
   if(selected.isEmpty()||fileBusy)return;
   ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
   new AlertDialog.Builder(this).setTitle("確認刪除 "+snapshot.size()+" 個檔案").setMessage("警告：刪除後檔案將直接由系統移除，無法透過本程式復原！\n請確定要刪除這些勾選的媒體檔案。").setNegativeButton("取消",null).setPositiveButton("刪除",(d,w)->{
-   pendingDeletes=snapshot;
+   pendingDeletes=new ArrayList<>(snapshot);
    isDeleting=true;
    fileBusy=true;
    updateSelection();
-   requestDelete();
+   applyDeleteBatch();
   }).show();
- }
- private void requestDelete(){
-  if(pendingDeletes==null||pendingDeletes.isEmpty()){
-   fileBusy=false;updateSelection();status.setText("沒有需要刪除的項目。");return;
-  }
-  try{
-   ArrayList<Uri> uris=new ArrayList<>();
-   for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
-   startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
-  }catch(Exception e){status.setText("無法取得刪除授權："+e.getMessage());pendingDeletes=null;fileBusy=false;updateSelection();}
  }
  private void finishMoveOperation(){
   pending=null;fileBusy=false;
@@ -214,41 +221,80 @@ public class MainActivity extends Activity {
   }
   updateSelection();
  }
- private void requestWrite(){if(pending==null||pending.isEmpty()){status.setText("檔案已在目的資料夾，沒有需要移動的項目。");finishMoveOperation();return;}
-  try{ArrayList<Uri> uris=new ArrayList<>();for(int i=0;i<Math.min(100,pending.size());i++)uris.add(pending.get(i).uri);startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),uris).getIntentSender(),51,null,0,0,0);}catch(Exception e){status.setText("無法取得移動授權："+e.getMessage());finishMoveOperation();}}
  public void onActivityResult(int request,int response,Intent data){super.onActivityResult(request,response,data);
   if(request==51){if(response==RESULT_OK)applyBatch();else{finishMoveOperation();status.setText("此批移動未獲授權，未移動此批檔案。先前成功的批次可復原。");}}
   else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{pendingDeletes=null;fileBusy=false;updateSelection();status.setText("此批刪除未獲授權。");}}
  }
  private void applyDeleteBatch(){
-  if(pendingDeletes==null)return;
+  if(pendingDeletes==null||pendingDeletes.isEmpty()){
+   pendingDeletes=null;fileBusy=false;saveScanCache(result);
+   status.setText("刪除完成；已移除所選檔案。");
+   render();return;
+  }
   final List<Scanner.Item> batch=new ArrayList<>(pendingDeletes.subList(0,Math.min(100,pendingDeletes.size())));
   pendingDeletes.subList(0,batch.size()).clear();
-  for(Scanner.Item item:batch){item.removed=true;selected.remove(item);}
-  if(pendingDeletes!=null&&!pendingDeletes.isEmpty()){
-   requestDelete();
-  }else{
-   pendingDeletes=null;
-   fileBusy=false;
-   saveScanCache(result);
-   status.setText("刪除完成；已移除所選檔案。");
-   render();
-  }
+  fileWorker.execute(()->{
+   int deleted=0,failed=0;RecoverableSecurityException recoverableEx=null;
+   for(Scanner.Item item:batch){if(dead)break;
+    try{
+     int count=getContentResolver().delete(item.uri,null,null);
+     if(count>0){item.removed=true;deleted++;}else{failed++;}
+    }catch(SecurityException e){
+     if(Build.VERSION.SDK_INT>=29&&e instanceof RecoverableSecurityException&&recoverableEx==null){recoverableEx=(RecoverableSecurityException)e;}
+     failed++;
+    }catch(Exception e){failed++;}
+   }
+   final int dCount=deleted,fCount=failed;final RecoverableSecurityException finalEx=recoverableEx;
+   ui(()->{
+    for(Scanner.Item item:batch)if(item.removed)selected.remove(item);
+    if(finalEx!=null){
+     try{startIntentSenderForResult(finalEx.getUserAction().getActionIntent().getIntentSender(),52,null,0,0,0);}
+     catch(Exception e){pendingDeletes=null;fileBusy=false;updateSelection();status.setText("刪除失敗："+e.getMessage());}
+    }else if(pendingDeletes!=null&&!pendingDeletes.isEmpty()){
+     applyDeleteBatch();
+    }else{
+     pendingDeletes=null;fileBusy=false;saveScanCache(result);
+     status.setText("刪除完成 · 成功 "+dCount+" · 失敗 "+fCount+"；已移除所選檔案。");
+     render();
+    }
+   });
+  });
  }
  private boolean operationHasSuccess=false;private int operationMoved=0,operationFailed=0;
  private void applyBatch(){
-  if(pending==null)return;final List<MoveRecord> batch=new ArrayList<>(pending.subList(0,Math.min(100,pending.size())));pending.subList(0,batch.size()).clear();
-  fileWorker.execute(()->{int moved=0,failed=0;for(MoveRecord r:batch){if(dead)break;try{
+  if(pending==null||pending.isEmpty()){
+   finishMoveOperation();status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));
+   operationHasSuccess=false;operationMoved=operationFailed=0;render();return;
+  }
+  final List<MoveRecord> batch=new ArrayList<>(pending.subList(0,Math.min(100,pending.size())));pending.subList(0,batch.size()).clear();
+  fileWorker.execute(()->{
+   int moved=0,failed=0;RecoverableSecurityException recoverableEx=null;
+   for(MoveRecord r:batch){if(dead)break;try{
     if(r.newPath==null||r.newPath.isEmpty()||(!undoing&&(r.oldPath==null||r.oldPath.isEmpty())))throw new IOException("原資料夾紀錄不完整");String finalName=collision(r.uri,r.newPath,r.newName)?uniqueName(r.newName):r.newName;
     ContentValues values=new ContentValues();values.put(MediaStore.MediaColumns.RELATIVE_PATH,r.newPath);values.put(MediaStore.MediaColumns.DISPLAY_NAME,finalName);
     if(!undoing){if(!operationHasSuccess){writeJournal(new JSONArray());operationHasSuccess=true;}appendJournal(r);}
     int updated=getContentResolver().update(r.uri,values,null,null);if(updated!=1)throw new IOException("檔案更新失敗");moved++;
     if(undoing){removeJournal(r.uri);}
     if(r.item!=null){r.item.removed=true;}
+   }catch(SecurityException e){
+    if(Build.VERSION.SDK_INT>=29&&e instanceof RecoverableSecurityException&&recoverableEx==null){recoverableEx=(RecoverableSecurityException)e;}
+    failed++;
    }catch(Exception e){failed++;}}
-   final int m=moved,f=failed;ui(()->{operationMoved+=m;operationFailed+=f;if(!undoing)for(MoveRecord r:batch)if(r.item!=null&&r.item.removed)selected.remove(r.item);
-    if(pending!=null&&!pending.isEmpty()){status.setText("已移動 "+operationMoved+" 個，繼續請求下一批授權…");requestWrite();}
-    else{finishMoveOperation();status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));operationHasSuccess=false;operationMoved=operationFailed=0;render();}});
+   final int m=moved,f=failed;final RecoverableSecurityException finalEx=recoverableEx;
+   ui(()->{
+    operationMoved+=m;operationFailed+=f;
+    if(!undoing)for(MoveRecord r:batch)if(r.item!=null&&r.item.removed)selected.remove(r.item);
+    if(finalEx!=null){
+     try{startIntentSenderForResult(finalEx.getUserAction().getActionIntent().getIntentSender(),51,null,0,0,0);}
+     catch(Exception e){finishMoveOperation();status.setText("移動失敗："+e.getMessage());}
+    }else if(pending!=null&&!pending.isEmpty()){
+     applyBatch();
+    }else{
+     finishMoveOperation();
+     status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));
+     operationHasSuccess=false;operationMoved=operationFailed=0;render();
+    }
+   });
   });
  }
  private boolean collision(Uri self,String path,String name){try(android.database.Cursor c=getContentResolver().query(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),new String[]{"_id"},"relative_path = ? AND _display_name = ?",new String[]{path,name},null)){if(c!=null)while(c.moveToNext())if(c.getLong(0)!=ContentUris.parseId(self))return true;}return false;}
