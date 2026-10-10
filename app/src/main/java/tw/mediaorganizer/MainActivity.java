@@ -79,12 +79,13 @@ public class MainActivity extends Activity {
   }
   String[] items=folders.toArray(new String[0]);
   boolean[] checked=new boolean[items.length];
-  for(int i=0;i<items.length;i++)checked[i]=sourceFilters.contains(items[i]+"/");
+  Set<String> tempFilters=new TreeSet<>(sourceFilters);
+  for(int i=0;i<items.length;i++)checked[i]=tempFilters.contains(items[i]+"/");
   new AlertDialog.Builder(this).setTitle("選擇來源資料夾（可多選）").setMultiChoiceItems(items,checked,(dialog,which,isChecked)->{
    String path=items[which]+"/";
-   if(isChecked)sourceFilters.add(path);
-   else sourceFilters.remove(path);
-  }).setPositiveButton("確定",(d,w)->updateSrcLabel()).setNeutralButton("全選/全部媒體",(d,w)->{sourceFilters.clear();updateSrcLabel();}).setNegativeButton("取消",null).show();
+   if(isChecked)tempFilters.add(path);
+   else tempFilters.remove(path);
+  }).setPositiveButton("確定",(d,w)->{sourceFilters.clear();sourceFilters.addAll(tempFilters);updateSrcLabel();}).setNeutralButton("全選/全部媒體",(d,w)->{sourceFilters.clear();updateSrcLabel();}).setNegativeButton("取消",null).show();
  }
 
  private void updateSrcLabel(){
@@ -115,13 +116,13 @@ public class MainActivity extends Activity {
  public void onRequestPermissionsResult(int code,String[] perms,int[] grants){super.onRequestPermissionsResult(code,perms,grants);if(code==41){boolean granted=false;for(int g:grants)if(g==PackageManager.PERMISSION_GRANTED)granted=true;if(granted)startScan();else status.setText("尚未取得媒體權限；請重新掃描並授權。");}}
  private void setBusy(boolean b){busy=b;scan.setEnabled(!b);cancel.setEnabled(b);people.setEnabled(!b);strictness.setEnabled(!b);mediaTypeSpinner.setEnabled(!b);move.setEnabled(!selected.isEmpty()&&!fileBusy);deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}
  private void startScan(){
-  selected.clear();result=new Scanner.Result();render();setBusy(true);cancelled=false;status.setText("掃描中，可即時查看結果與進行處理…");final boolean faces=people.isChecked();final int setting=strictness.getSelectedItemPosition();final int mediaType=mediaTypeSpinner.getSelectedItemPosition();lastProgress=0;
+  selected.clear();result=new Scanner.Result();render();setBusy(true);cancelled=false;status.setText("掃描中，可即時查看結果與進行處理…");final boolean faces=people.isChecked();final int setting=strictness.getSelectedItemPosition();final int mediaType=mediaTypeSpinner.getSelectedItemPosition();final Set<String> snapshotFilters=new HashSet<>(sourceFilters);lastProgress=0;
   scanWorker.execute(()->{try{clearThumbs();
     Scanner scanner=new Scanner(this,new Scanner.Progress(){
      public boolean cancelled(){return cancelled||dead;}
      public void report(String s){long now=System.currentTimeMillis();if(now-lastProgress<250)return;lastProgress=now;ui(()->status.setText(s));}
      public void onPartialResult(Scanner.Result partial){ui(()->{result=partial;render();});}
-    },faces,new int[]{5,8,12}[setting],new double[]{.72,.65,.58}[setting],sourceFilters,mediaType);
+    },faces,new int[]{5,8,12}[setting],new double[]{.72,.65,.58}[setting],snapshotFilters,mediaType);
     Scanner.Result scanned=scanner.run();
     ui(()->{result=scanned;saveScanCache(scanned);setBusy(false);boolean full=Build.VERSION.SDK_INT<33||permission("android.permission.READ_MEDIA_IMAGES")&&permission("android.permission.READ_MEDIA_VIDEO");String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";if(!sourceFilters.isEmpty())summary+=" (來源: 已選 "+sourceFilters.size()+" 個資料夾)";if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;status.setText(summary);render();});
    }catch(InterruptedException e){ui(()->{saveScanCache(result);setBusy(false);status.setText("掃描已停止，已呈現部分結果與記錄。");render();});}catch(Exception|LinkageError e){ui(()->{setBusy(false);status.setText("掃描失敗："+e.getClass().getSimpleName()+" · "+e.getMessage());});}});
@@ -148,7 +149,9 @@ public class MainActivity extends Activity {
   if(input==null)input="";input=input.trim();
   if(input.endsWith("/"))input=input.substring(0,input.length()-1);
   if(input.isEmpty()||input.equals(".")||input.equals("..")||input.matches(".*[*?\"<>|\\p{Cntrl}].*")||input.length()>120){status.setText("請填寫有效的資料夾名稱或路徑。");return null;}
-  String target=input.contains("/")?input+"/":"DCIM/"+input+"/";
+  List<String> existing=getMediaSubfolders();
+  boolean isExistingOrRoot=existing.contains(input)||input.contains("/")||Arrays.asList("DCIM","Pictures","Movies","Download","Documents","Music").contains(input);
+  String target=isExistingOrRoot?input+"/":"DCIM/"+input+"/";
   getPreferences(0).edit().putString("folder",input).apply();return target;
  }
  private void confirmMove(){
@@ -195,7 +198,7 @@ public class MainActivity extends Activity {
  private void requestWrite(){if(pending==null||pending.isEmpty()){status.setText("檔案已在目的資料夾，沒有需要移動的項目。");pending=null;fileBusy=false;updateSelection();return;}
   try{ArrayList<Uri> uris=new ArrayList<>();for(int i=0;i<Math.min(100,pending.size());i++)uris.add(pending.get(i).uri);startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),uris).getIntentSender(),51,null,0,0,0);}catch(Exception e){status.setText("無法取得移動授權："+e.getMessage());pending=null;fileBusy=false;updateSelection();}}
  public void onActivityResult(int request,int response,Intent data){super.onActivityResult(request,response,data);
-  if(request==51){if(response==RESULT_OK)applyBatch();else{pending=null;fileBusy=false;updateSelection();status.setText("此批移動未獲授權，未移動此批檔案。先前成功的批次可復原。");}}
+  if(request==51){if(response==RESULT_OK)applyBatch();else{pending=null;fileBusy=false;if(!undoing){if(operationMoved==0)restoreJournalBackup();else clearJournalBackup();}updateSelection();status.setText("此批移動未獲授權，未移動此批檔案。先前成功的批次可復原。");}}
   else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{pendingDeletes=null;fileBusy=false;updateSelection();status.setText("此批刪除未獲授權。");}}
  }
  private void applyDeleteBatch(){
@@ -208,6 +211,7 @@ public class MainActivity extends Activity {
   }else{
    pendingDeletes=null;
    fileBusy=false;
+   saveScanCache(result);
    status.setText("刪除完成；已移除所選檔案。");
    render();
   }
@@ -225,7 +229,7 @@ public class MainActivity extends Activity {
    }catch(Exception e){failed++;}}
    final int m=moved,f=failed;ui(()->{operationMoved+=m;operationFailed+=f;if(!undoing)for(MoveRecord r:batch)if(r.item!=null&&r.item.removed)selected.remove(r.item);
     if(pending!=null&&!pending.isEmpty()){status.setText("已移動 "+operationMoved+" 個，繼續請求下一批授權…");requestWrite();}
-    else{pending=null;fileBusy=false;if(!undoing){if(operationMoved==0)restoreJournalBackup();else clearJournalBackup();}status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));operationHasSuccess=false;operationMoved=operationFailed=0;if(undoing){result=null;selected.clear();}render();}});
+    else{pending=null;fileBusy=false;if(!undoing){if(operationMoved==0)restoreJournalBackup();else clearJournalBackup();}saveScanCache(result);status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));operationHasSuccess=false;operationMoved=operationFailed=0;if(undoing){result=null;selected.clear();cacheFile().delete();}render();}});
   });
  }
  private boolean collision(Uri self,String path,String name){try(android.database.Cursor c=getContentResolver().query(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),new String[]{"_id"},"relative_path = ? AND _display_name = ?",new String[]{path,name},null)){if(c!=null)while(c.moveToNext())if(c.getLong(0)!=ContentUris.parseId(self))return true;}return false;}
@@ -266,13 +270,13 @@ public class MainActivity extends Activity {
     synchronized(res){
      for(int i=0;i<res.all.size();i++){
       Scanner.Item item=res.all.get(i);itemMap.put(item,i);
-      JSONObject o=new JSONObject();o.put("uri",item.uri.toString());o.put("name",item.name);o.put("mime",item.mime);o.put("path",item.path);o.put("size",item.size);o.put("duration",item.duration);o.put("video",item.video);
+      JSONObject o=new JSONObject();o.put("uri",item.uri.toString());o.put("name",item.name);o.put("mime",item.mime);o.put("path",item.path);o.put("size",item.size);o.put("duration",item.duration);o.put("video",item.video);o.put("removed",item.removed);
       if(item.thumb!=null)o.put("thumb",item.thumb.getAbsolutePath());all.put(o);
      }
      root.put("all",all);root.put("exact",groupsToJson(res.exact,itemMap));root.put("similar",groupsToJson(res.similar,itemMap));root.put("people",groupsToJson(res.people,itemMap));root.put("unreadable",res.unreadable);root.put("faceFailures",res.faceFailures);root.put("faceError",res.faceError);
     }
     File tmp=new File(getFilesDir(),"scan-cache.tmp");
-    try(FileOutputStream out=new FileOutputStream(tmp)){out.write(root.toString("UTF-8").getBytes("UTF-8"));out.getFD().sync();}
+    try(FileOutputStream out=new FileOutputStream(tmp)){out.write(root.toString().getBytes("UTF-8"));out.getFD().sync();}
     tmp.renameTo(cacheFile());
    }catch(Exception e){}
   });
@@ -292,7 +296,7 @@ public class MainActivity extends Activity {
    ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);
    JSONObject root=new JSONObject(out.toString("UTF-8"));Scanner.Result res=new Scanner.Result();JSONArray all=root.getJSONArray("all");
    for(int i=0;i<all.length();i++){
-    JSONObject o=all.getJSONObject(i);Scanner.Item item=new Scanner.Item();item.uri=Uri.parse(o.getString("uri"));item.name=o.optString("name","");item.mime=o.optString("mime",null);item.path=o.optString("path","");item.size=o.optLong("size",0);item.duration=o.optLong("duration",0);item.video=o.optBoolean("video",false);
+    JSONObject o=all.getJSONObject(i);Scanner.Item item=new Scanner.Item();item.uri=Uri.parse(o.getString("uri"));item.name=o.optString("name","");item.mime=o.optString("mime",null);item.path=o.optString("path","");item.size=o.optLong("size",0);item.duration=o.optLong("duration",0);item.video=o.optBoolean("video",false);item.removed=o.optBoolean("removed",false);
     if(o.has("thumb"))item.thumb=new File(o.getString("thumb"));res.all.add(item);
    }
    res.exact.addAll(jsonToGroups(root.getJSONArray("exact"),res.all));res.similar.addAll(jsonToGroups(root.getJSONArray("similar"),res.all));res.people.addAll(jsonToGroups(root.getJSONArray("people"),res.all));
