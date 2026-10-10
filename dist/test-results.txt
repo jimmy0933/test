@@ -10,4 +10,5 @@ PASS different embedding directions
 PASS zero embeddings rejected
 PASS nonfinite embeddings rejected
 PASS unreadable image excluded
-12 checks passed
+PASS SQL LIKE wildcards escaped
+13 checks passed
