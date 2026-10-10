@@ -15,14 +15,14 @@ import org.json.*;
 
 public class MainActivity extends Activity {
  private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3;
- private LinearLayout root,list;private TextView status,selection,srcLabel;private EditText folder;private CheckBox people;private Spinner strictness;private Button scan,move,deleteBtn,cancel;
+ private LinearLayout root,list;private TextView status,selection,srcLabel;private CheckBox people;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService scanWorker=Executors.newSingleThreadExecutor();
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean cancelled,dead,busy,fileBusy;private Scanner.Result result;
  private final LinkedHashSet<Scanner.Item> selected=new LinkedHashSet<>();private int mode=0,limit=20;
  private List<MoveRecord> pending;private boolean undoing;private String destination;private long lastProgress;
  private boolean isDeleting;private List<Scanner.Item> pendingDeletes;
- private String sourceFilter="";
+ private final Set<String> sourceFilters=new TreeSet<>();
 
  private static final class MoveRecord {Uri uri;String oldPath,oldName,newPath,newName;Scanner.Item item;}
  public void onCreate(Bundle saved){super.onCreate(saved);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);build();}
@@ -36,19 +36,23 @@ public class MainActivity extends Activity {
 
   LinearLayout srcBox=new LinearLayout(this);srcBox.setGravity(Gravity.CENTER_VERTICAL);
   srcBox.addView(button("選擇來源資料夾",this::selectSourceFolder),new LinearLayout.LayoutParams(-2,dp(42)));
-  srcLabel=text(sourceFilter.isEmpty()?" 來源：全部媒體":" 來源："+sourceFilter,12);
+  srcLabel=text(" 來源：全部媒體",12);
   srcBox.addView(srcLabel,new LinearLayout.LayoutParams(0,-2,1));
   root.addView(srcBox);
 
   people=new CheckBox(this);people.setText("同時分析人物（較耗時）");people.setTextColor(TEXT);people.setChecked(true);root.addView(people);
   LinearLayout actions=new LinearLayout(this);scan=button("開始掃描",this::requestScan);cancel=button("停止",()->{cancelled=true;status.setText("正在停止，已完成的掃描結果已保留…");});cancel.setEnabled(false);actions.addView(scan,new LinearLayout.LayoutParams(0,dp(48),1));actions.addView(cancel,new LinearLayout.LayoutParams(dp(80),dp(48)));root.addView(actions);
-  LinearLayout opts=new LinearLayout(this);opts.setGravity(Gravity.CENTER_VERTICAL);opts.addView(text("相似程度",12));strictness=new Spinner(this);String[] labels={"嚴格（建議）","一般","寬鬆（較多誤判）"};ArrayAdapter<String> adapter=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,labels){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);strictness.setAdapter(adapter);opts.addView(strictness);root.addView(opts);
 
-  LinearLayout dstBox=new LinearLayout(this);dstBox.setGravity(Gravity.CENTER_VERTICAL);
-  folder=new EditText(this);folder.setSingleLine(true);folder.setTextColor(TEXT);folder.setTextSize(14);folder.setHintTextColor(0xff9baac2);folder.setHint("目的資料夾名稱");folder.setText(getPreferences(0).getString("folder","整理收藏"));
-  dstBox.addView(folder,new LinearLayout.LayoutParams(0,dp(44),1));
-  dstBox.addView(button("選擇/新建",this::selectOrNewFolder),new LinearLayout.LayoutParams(-2,dp(42)));
-  root.addView(text("目的地：手機內部儲存空間 / DCIM / 資料夾名稱",11));root.addView(dstBox);
+  LinearLayout opts=new LinearLayout(this);opts.setGravity(Gravity.CENTER_VERTICAL);
+  opts.addView(text("媒體",12));
+  mediaTypeSpinner=new Spinner(this);
+  String[] mediaTypes={"全部","僅照片","僅影片"};
+  ArrayAdapter<String> mediaAdapter=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,mediaTypes){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};
+  mediaAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+  mediaTypeSpinner.setAdapter(mediaAdapter);
+  opts.addView(mediaTypeSpinner);
+
+  opts.addView(text("  相似程度",12));strictness=new Spinner(this);String[] labels={"嚴格（建議）","一般","寬鬆（較多誤判）"};ArrayAdapter<String> adapter=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,labels){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);strictness.setAdapter(adapter);opts.addView(strictness);root.addView(opts);
 
   status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);root.addView(status);
   LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);tabs.addView(tab,new LinearLayout.LayoutParams(0,dp(44),1));}root.addView(tabs);
@@ -66,36 +70,24 @@ public class MainActivity extends Activity {
 
  private void selectSourceFolder(){
   List<String> folders=getDcimSubfolders();
-  folders.add(0,"[ 全部媒體 ]");
+  if(folders.isEmpty()){
+   Toast.makeText(this,"DCIM 目錄下尚無子資料夾",Toast.LENGTH_SHORT).show();
+   return;
+  }
   String[] items=folders.toArray(new String[0]);
-  new AlertDialog.Builder(this).setTitle("選擇來源資料夾").setItems(items,(dialog,which)->{
-   if(which==0)sourceFilter="";
-   else sourceFilter="DCIM/"+items[which]+"/";
-   srcLabel.setText(sourceFilter.isEmpty()?" 來源：全部媒體":" 來源："+sourceFilter);
-   Toast.makeText(this,"已選擇來源："+(sourceFilter.isEmpty()?"全部媒體":sourceFilter),Toast.LENGTH_SHORT).show();
-  }).setNegativeButton("取消",null).show();
+  boolean[] checked=new boolean[items.length];
+  for(int i=0;i<items.length;i++)checked[i]=sourceFilters.contains("DCIM/"+items[i]+"/");
+  new AlertDialog.Builder(this).setTitle("選擇來源資料夾（可多選）").setMultiChoiceItems(items,checked,(dialog,which,isChecked)->{
+   String path="DCIM/"+items[which]+"/";
+   if(isChecked)sourceFilters.add(path);
+   else sourceFilters.remove(path);
+  }).setPositiveButton("確定",(d,w)->updateSrcLabel()).setNeutralButton("全選/全部媒體",(d,w)->{sourceFilters.clear();updateSrcLabel();}).setNegativeButton("取消",null).show();
  }
 
- private void selectOrNewFolder(){
-  List<String> folders=getDcimSubfolders();
-  folders.add("[ 新增資料夾… ]");
-  String[] items=folders.toArray(new String[0]);
-  new AlertDialog.Builder(this).setTitle("選擇或新建目的資料夾").setItems(items,(dialog,which)->{
-   if(which==items.length-1){
-    EditText input=new EditText(this);
-    input.setHint("請輸入新資料夾名稱");
-    new AlertDialog.Builder(this).setTitle("新建資料夾").setView(input).setPositiveButton("確定",(d,w)->{
-     String name=input.getText().toString().trim();
-     if(!name.isEmpty()){
-      folder.setText(name);
-      Toast.makeText(this,"已設定目的資料夾："+name,Toast.LENGTH_SHORT).show();
-     }
-    }).setNegativeButton("取消",null).show();
-   }else{
-    folder.setText(items[which]);
-    Toast.makeText(this,"已選擇目的資料夾："+items[which],Toast.LENGTH_SHORT).show();
-   }
-  }).setNegativeButton("取消",null).show();
+ private void updateSrcLabel(){
+  if(sourceFilters.isEmpty())srcLabel.setText(" 來源：全部媒體");
+  else if(sourceFilters.size()==1)srcLabel.setText(" 來源："+sourceFilters.iterator().next());
+  else srcLabel.setText(" 來源：已選 "+sourceFilters.size()+" 個資料夾");
  }
 
  private List<String> getDcimSubfolders(){
@@ -121,17 +113,17 @@ public class MainActivity extends Activity {
   else if(!permission("android.permission.READ_EXTERNAL_STORAGE")){requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"},41);return;}startScan();
  }
  public void onRequestPermissionsResult(int code,String[] perms,int[] grants){super.onRequestPermissionsResult(code,perms,grants);if(code==41){boolean granted=false;for(int g:grants)if(g==PackageManager.PERMISSION_GRANTED)granted=true;if(granted)startScan();else status.setText("尚未取得媒體權限；請重新掃描並授權。");}}
- private void setBusy(boolean b){busy=b;scan.setEnabled(!b);cancel.setEnabled(b);people.setEnabled(!b);strictness.setEnabled(!b);folder.setEnabled(!b);move.setEnabled(!selected.isEmpty()&&!fileBusy);deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}
+ private void setBusy(boolean b){busy=b;scan.setEnabled(!b);cancel.setEnabled(b);people.setEnabled(!b);strictness.setEnabled(!b);mediaTypeSpinner.setEnabled(!b);move.setEnabled(!selected.isEmpty()&&!fileBusy);deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}
  private void startScan(){
-  selected.clear();result=new Scanner.Result();render();setBusy(true);cancelled=false;status.setText("掃描中，可即時查看結果與進行處理…");final boolean faces=people.isChecked();final int setting=strictness.getSelectedItemPosition();lastProgress=0;
+  selected.clear();result=new Scanner.Result();render();setBusy(true);cancelled=false;status.setText("掃描中，可即時查看結果與進行處理…");final boolean faces=people.isChecked();final int setting=strictness.getSelectedItemPosition();final int mediaType=mediaTypeSpinner.getSelectedItemPosition();lastProgress=0;
   scanWorker.execute(()->{try{clearThumbs();
     Scanner scanner=new Scanner(this,new Scanner.Progress(){
      public boolean cancelled(){return cancelled||dead;}
      public void report(String s){long now=System.currentTimeMillis();if(now-lastProgress<250)return;lastProgress=now;ui(()->status.setText(s));}
      public void onPartialResult(Scanner.Result partial){ui(()->{result=partial;render();});}
-    },faces,new int[]{5,8,12}[setting],new double[]{.72,.65,.58}[setting],sourceFilter);
+    },faces,new int[]{5,8,12}[setting],new double[]{.72,.65,.58}[setting],sourceFilters,mediaType);
     Scanner.Result scanned=scanner.run();
-    ui(()->{result=scanned;setBusy(false);boolean full=Build.VERSION.SDK_INT<33||permission("android.permission.READ_MEDIA_IMAGES")&&permission("android.permission.READ_MEDIA_VIDEO");String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";if(!sourceFilter.isEmpty())summary+=" (來源: "+sourceFilter+")";if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;status.setText(summary);render();});
+    ui(()->{result=scanned;setBusy(false);boolean full=Build.VERSION.SDK_INT<33||permission("android.permission.READ_MEDIA_IMAGES")&&permission("android.permission.READ_MEDIA_VIDEO");String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";if(!sourceFilters.isEmpty())summary+=" (來源: 已選 "+sourceFilters.size()+" 個資料夾)";if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;status.setText(summary);render();});
    }catch(InterruptedException e){ui(()->{setBusy(false);status.setText("掃描已停止，已呈現部分結果。");render();});}catch(Exception|LinkageError e){ui(()->{setBusy(false);status.setText("掃描失敗："+e.getClass().getSimpleName()+" · "+e.getMessage());});}});
  }
  private void ui(Runnable r){if(!dead)runOnUiThread(()->{if(!dead)r.run();});}
@@ -152,8 +144,29 @@ public class MainActivity extends Activity {
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
  private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}
  private void preview(Scanner.Item item){try{Intent intent=new Intent(Intent.ACTION_VIEW);intent.setDataAndType(item.uri,item.mime!=null?item.mime:item.video?"video/*":"image/*");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(intent);}catch(ActivityNotFoundException e){new AlertDialog.Builder(this).setMessage("手機沒有可開啟此媒體的應用程式。").setPositiveButton("確定",null).show();}}
- private String safeDestination(){String name=folder.getText().toString().trim();if(name.isEmpty()||name.equals(".")||name.equals("..")||name.matches(".*[\\\\/:*?\"<>|\\p{Cntrl}].*")||name.length()>80){status.setText("請填寫有效的單層資料夾名稱（80 字以內）。");return null;}getPreferences(0).edit().putString("folder",name).apply();return "DCIM/"+name+"/";}
- private void confirmMove(){if(selected.isEmpty()||fileBusy||busy)return;String target=safeDestination();if(target==null)return;ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
+ private String validateDestination(String name){
+  if(name==null)name="";name=name.trim();
+  if(name.isEmpty()||name.equals(".")||name.equals("..")||name.matches(".*[\\\\/:*?\"<>|\\p{Cntrl}].*")||name.length()>80){status.setText("請填寫有效的單層資料夾名稱（80 字以內）。");return null;}
+  getPreferences(0).edit().putString("folder",name).apply();return "DCIM/"+name+"/";
+ }
+ private void confirmMove(){
+  if(selected.isEmpty()||fileBusy||busy)return;
+  List<String> folders=getDcimSubfolders();
+  folders.add("[ 新增/手動輸入資料夾… ]");
+  String[] items=folders.toArray(new String[0]);
+  new AlertDialog.Builder(this).setTitle("選擇移入的目的資料夾").setItems(items,(dialog,which)->{
+   if(which==items.length-1){
+    EditText input=new EditText(this);
+    input.setHint("請輸入目的資料夾名稱");
+    input.setText(getPreferences(0).getString("folder","整理收藏"));
+    new AlertDialog.Builder(this).setTitle("輸入目的資料夾名稱").setView(input).setPositiveButton("確定",(d,w)->promptMoveConfirmation(input.getText().toString())).setNegativeButton("取消",null).show();
+   }else{
+    promptMoveConfirmation(items[which]);
+   }
+  }).setNegativeButton("取消",null).show();
+ }
+ private void promptMoveConfirmation(String folderName){
+  String target=validateDestination(folderName);if(target==null)return;ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
   new AlertDialog.Builder(this).setTitle("確認移動 "+snapshot.size()+" 個檔案").setMessage("目的地："+target+"\n移動後會離開原資料夾；不刪除重複檔。相似與人物分組請先確認。\n同名檔會加上識別碼，不覆蓋既有檔案。\n這次成功的移動會取代上次復原紀錄。").setNegativeButton("取消",null).setPositiveButton("移動",(d,w)->{destination=target;pending=new ArrayList<>();for(Scanner.Item item:snapshot)if(!target.equals(item.path)){MoveRecord r=new MoveRecord();r.uri=item.uri;r.oldPath=item.path;r.oldName=item.name;r.newPath=target;r.newName=item.name;r.item=item;pending.add(r);}undoing=false;isDeleting=false;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;updateSelection();requestWrite();}).show();
  }
  private void confirmDelete(){

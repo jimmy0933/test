@@ -44,11 +44,14 @@ final class Scanner {
   }
  }
  interface Progress {void report(String s);boolean cancelled();void onPartialResult(Result partial);}
- final Context context;final Progress progress;final boolean people;final int bits;final double faceThreshold;final String sourceFilter;
- Scanner(Context c,Progress p,boolean f,int b,double t,String src){context=c;progress=p;people=f;bits=b;faceThreshold=t;sourceFilter=src!=null?src:"";}
+ final Context context;final Progress progress;final boolean people;final int bits;final double faceThreshold;final Set<String> sourceFilters;final int mediaType;
+ Scanner(Context c,Progress p,boolean f,int b,double t,Set<String> srcs,int m){context=c;progress=p;people=f;bits=b;faceThreshold=t;sourceFilters=srcs!=null?srcs:Collections.emptySet();mediaType=m;}
  private void check()throws InterruptedException{if(progress.cancelled()||Thread.currentThread().isInterrupted())throw new InterruptedException();}
  Result run()throws Exception{
-  Result result=new Result();query(result,false);query(result,true);check();
+  Result result=new Result();
+  if(mediaType!=2)query(result,false);
+  if(mediaType!=1)query(result,true);
+  check();
   if(progress!=null)progress.onPartialResult(result.snapshot());
   Map<String,List<Item>> sizes=new HashMap<>();
   synchronized(result){for(Item item:result.all)sizes.computeIfAbsent((item.video?"v":"p")+item.size,k->new ArrayList<>()).add(item);}
@@ -115,13 +118,21 @@ final class Scanner {
  private void query(Result result,boolean video)throws InterruptedException{
   Uri base=video?MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY):MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
   String[] columns={"_id","_display_name","mime_type","_size","relative_path",video?"duration":"width"};
-  String selection="_size > 0";
-  String[] selectionArgs=null;
-  if(!sourceFilter.isEmpty()){
-   selection+=" AND relative_path LIKE ? ESCAPE '\\'";
-   selectionArgs=new String[]{escapeLike(sourceFilter)+"%"};
+  StringBuilder selection=new StringBuilder("_size > 0");
+  List<String> selectionArgsList=new ArrayList<>();
+  if(!sourceFilters.isEmpty()){
+   selection.append(" AND (");
+   int idx=0;
+   for(String src:sourceFilters){
+    if(idx>0)selection.append(" OR ");
+    selection.append("relative_path LIKE ? ESCAPE '\\'");
+    selectionArgsList.add(escapeLike(src)+"%");
+    idx++;
+   }
+   selection.append(")");
   }
-  try(Cursor cursor=context.getContentResolver().query(base,columns,selection,selectionArgs,"date_added DESC")){
+  String[] selectionArgs=selectionArgsList.isEmpty()?null:selectionArgsList.toArray(new String[0]);
+  try(Cursor cursor=context.getContentResolver().query(base,columns,selection.toString(),selectionArgs,"date_added DESC")){
    if(cursor==null)return;while(cursor.moveToNext()){check();Item item=new Item();item.uri=ContentUris.withAppendedId(base,cursor.getLong(0));item.name=cursor.getString(1);item.mime=cursor.getString(2);item.size=cursor.getLong(3);item.path=cursor.getString(4);item.video=video;item.duration=video?cursor.getLong(5):0;synchronized(result){result.all.add(item);}}
   }catch(SecurityException e){progress.report((video?"影片":"圖片")+"讀取權限不足");}
  }
