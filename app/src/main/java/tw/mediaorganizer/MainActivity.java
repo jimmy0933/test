@@ -190,13 +190,17 @@ public class MainActivity extends Activity {
    pendingDeletes=snapshot;
    isDeleting=true;
    fileBusy=true;
+   operationDeleted=operationDeleteFailed=0;
    updateSelection();
    requestDelete();
   }).show();
  }
  private void requestDelete(){
   if(pendingDeletes==null||pendingDeletes.isEmpty()){
-   fileBusy=false;updateSelection();status.setText("沒有需要刪除的項目。");return;
+   fileBusy=false;updateSelection();
+   status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
+   render();
+   return;
   }
   try{
    ArrayList<Uri> uris=new ArrayList<>();
@@ -213,42 +217,64 @@ public class MainActivity extends Activity {
    result=null;selected.clear();cacheFile().delete();
   }
   updateSelection();
+  render();
  }
- private void requestWrite(){if(pending==null||pending.isEmpty()){status.setText("檔案已在目的資料夾，沒有需要移動的項目。");finishMoveOperation();return;}
+ private void requestWrite(){if(pending==null||pending.isEmpty()){
+  status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));
+  finishMoveOperation();
+  operationHasSuccess=false;operationMoved=operationFailed=0;
+  return;
+ }
   try{ArrayList<Uri> uris=new ArrayList<>();for(int i=0;i<Math.min(100,pending.size());i++)uris.add(pending.get(i).uri);startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),uris).getIntentSender(),51,null,0,0,0);}catch(Exception e){status.setText("無法取得移動授權："+e.getMessage());finishMoveOperation();}}
  public void onActivityResult(int request,int response,Intent data){super.onActivityResult(request,response,data);
-  if(request==51){if(response==RESULT_OK)applyBatch();else{finishMoveOperation();status.setText("此批移動未獲授權，未移動此批檔案。先前成功的批次可復原。");}}
-  else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{pendingDeletes=null;fileBusy=false;updateSelection();status.setText("此批刪除未獲授權。");}}
+  if(request==51){if(response==RESULT_OK)applyBatch();else{
+   status.setText("未獲授權 · 已完成：成功 "+operationMoved+" · 失敗 "+operationFailed+"。未授權之檔案已保留可重試。");
+   finishMoveOperation();
+   operationHasSuccess=false;operationMoved=operationFailed=0;
+  }}
+  else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{
+   status.setText("未獲刪除授權 · 已完成：成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed+"。未授權之檔案已保留。");
+   fileBusy=false;updateSelection();render();
+  }}
  }
+ private int operationDeleted=0,operationDeleteFailed=0;
  private void applyDeleteBatch(){
   if(pendingDeletes==null)return;
   final List<Scanner.Item> batch=new ArrayList<>(pendingDeletes.subList(0,Math.min(100,pendingDeletes.size())));
-  pendingDeletes.subList(0,batch.size()).clear();
   for(Scanner.Item item:batch){item.removed=true;selected.remove(item);}
+  pendingDeletes.removeAll(batch);
+  operationDeleted+=batch.size();
   if(pendingDeletes!=null&&!pendingDeletes.isEmpty()){
    requestDelete();
   }else{
    pendingDeletes=null;
    fileBusy=false;
    saveScanCache(result);
-   status.setText("刪除完成；已移除所選檔案。");
+   status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
    render();
   }
  }
  private boolean operationHasSuccess=false;private int operationMoved=0,operationFailed=0;
  private void applyBatch(){
-  if(pending==null)return;final List<MoveRecord> batch=new ArrayList<>(pending.subList(0,Math.min(100,pending.size())));pending.subList(0,batch.size()).clear();
-  fileWorker.execute(()->{int moved=0,failed=0;for(MoveRecord r:batch){if(dead)break;try{
+  if(pending==null)return;final List<MoveRecord> batch=new ArrayList<>(pending.subList(0,Math.min(100,pending.size())));
+  fileWorker.execute(()->{int moved=0,failed=0;List<MoveRecord> successfulRecords=new ArrayList<>();for(MoveRecord r:batch){if(dead)break;try{
     if(r.newPath==null||r.newPath.isEmpty()||(!undoing&&(r.oldPath==null||r.oldPath.isEmpty())))throw new IOException("原資料夾紀錄不完整");String finalName=collision(r.uri,r.newPath,r.newName)?uniqueName(r.newName):r.newName;
     ContentValues values=new ContentValues();values.put(MediaStore.MediaColumns.RELATIVE_PATH,r.newPath);values.put(MediaStore.MediaColumns.DISPLAY_NAME,finalName);
     if(!undoing){if(!operationHasSuccess){writeJournal(new JSONArray());operationHasSuccess=true;}appendJournal(r);}
     int updated=getContentResolver().update(r.uri,values,null,null);if(updated!=1)throw new IOException("檔案更新失敗");moved++;
     if(undoing){removeJournal(r.uri);}
     if(r.item!=null){r.item.removed=true;}
+    successfulRecords.add(r);
    }catch(Exception e){failed++;}}
-   final int m=moved,f=failed;ui(()->{operationMoved+=m;operationFailed+=f;if(!undoing)for(MoveRecord r:batch)if(r.item!=null&&r.item.removed)selected.remove(r.item);
-    if(pending!=null&&!pending.isEmpty()){status.setText("已移動 "+operationMoved+" 個，繼續請求下一批授權…");requestWrite();}
-    else{finishMoveOperation();status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));operationHasSuccess=false;operationMoved=operationFailed=0;render();}});
+   final int m=moved,f=failed;ui(()->{operationMoved+=m;operationFailed+=f;
+    if(pending!=null)pending.removeAll(batch);
+    if(!undoing)for(MoveRecord r:successfulRecords)if(r.item!=null)selected.remove(r.item);
+    if(pending!=null&&!pending.isEmpty()){status.setText("已處理 "+(operationMoved+operationFailed)+" 個（成功 "+operationMoved+"），繼續下一批…");requestWrite();}
+    else{
+     status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));
+     finishMoveOperation();
+     operationHasSuccess=false;operationMoved=operationFailed=0;
+    }});
   });
  }
  private boolean collision(Uri self,String path,String name){try(android.database.Cursor c=getContentResolver().query(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),new String[]{"_id"},"relative_path = ? AND _display_name = ?",new String[]{path,name},null)){if(c!=null)while(c.moveToNext())if(c.getLong(0)!=ContentUris.parseId(self))return true;}return false;}

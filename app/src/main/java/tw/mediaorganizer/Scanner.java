@@ -58,7 +58,15 @@ final class Scanner {
   Map<String,Group> hashes=new LinkedHashMap<>();int i=0;
   for(List<Item> candidates:sizes.values())if(candidates.size()>1)for(Item item:candidates){
    check(result);progress.report("檔案雜湊核對 · "+(++i)+" 個候選");
-   try{String hash=sha(item.uri,result);Group group=hashes.computeIfAbsent((item.video?"v":"p")+hash,k->new Group("完全重複 · SHA-256"));group.addItem(item);synchronized(result){if(group.items.size()==2)result.exact.add(group);}}
+   try{
+    String hash=sha(item.uri,result);
+    Group group=hashes.computeIfAbsent((item.video?"v":"p")+hash,k->new Group("完全重複 · SHA-256"));
+    group.addItem(item);
+    boolean newGroup=false;
+    synchronized(result){if(group.items.size()==2){result.exact.add(group);newGroup=true;}}
+    if(newGroup&&progress!=null)progress.onPartialResult(result.snapshot());
+   }
+   catch(InterruptedException e){throw e;}
    catch(IOException e){synchronized(result){result.unreadable++;}}
    if(i%5==0&&progress!=null)progress.onPartialResult(result.snapshot());
   }
@@ -87,7 +95,9 @@ final class Scanner {
        representatives.add(found);
       }
       found.addItem(item);
-      synchronized(result){if(found.items.size()==2)result.similar.add(found);}
+      boolean newSimilar=false;
+      synchronized(result){if(found.items.size()==2){result.similar.add(found);newSimilar=true;}}
+      if(newSimilar&&progress!=null)progress.onPartialResult(result.snapshot());
      }
      if(people){
       boolean hasFaceErr;synchronized(result){hasFaceErr=!result.faceError.isEmpty();}
@@ -104,11 +114,14 @@ final class Scanner {
          candidatePeople.add(best);
         }
         best.addItem(item);
-        synchronized(result){if(best.items.size()==2&&!result.people.contains(best))result.people.add(best);}
+        boolean newPerson=false;
+        synchronized(result){if(best.items.size()==2&&!result.people.contains(best)){result.people.add(best);newPerson=true;}}
+        if(newPerson&&progress!=null)progress.onPartialResult(result.snapshot());
        }
       }
      }
-    }catch(Exception e){synchronized(result){result.unreadable++;}}
+    }catch(InterruptedException e){throw e;}
+    catch(Exception e){synchronized(result){result.unreadable++;}}
     if(i%5==0&&progress!=null)progress.onPartialResult(result.snapshot());
    }
   }finally{if(engine!=null)engine.close();}
