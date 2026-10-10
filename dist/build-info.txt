@@ -1,5 +1,0 @@
-Source commit: e816ee681eb2f2603dbcceb3606a93cd1146822c
-Build run: https://github.com/jimmy0933/test/actions/runs/38047303585
-Model SHA-256: d8ba40c0127fb8ca9917e8fddc79bbbda063657bc92a496d34da0bc8a760443b
-Native libraries: arm64-v8a, armeabi-v7a, x86, x86_64
-Scope: logic tests and APK packaging; no Android device UI tests.

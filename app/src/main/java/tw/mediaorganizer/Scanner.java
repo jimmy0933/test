@@ -46,19 +46,19 @@ final class Scanner {
  interface Progress {void report(String s);boolean cancelled();void onPartialResult(Result partial);}
  final Context context;final Progress progress;final boolean people;final int bits;final double faceThreshold;final Set<String> sourceFilters;final int mediaType;
  Scanner(Context c,Progress p,boolean f,int b,double t,Set<String> srcs,int m){context=c;progress=p;people=f;bits=b;faceThreshold=t;sourceFilters=srcs!=null?srcs:Collections.emptySet();mediaType=m;}
- private void check()throws InterruptedException{if(progress.cancelled()||Thread.currentThread().isInterrupted())throw new InterruptedException();}
+ private void check(Result result)throws InterruptedException{if(progress!=null&&(progress.cancelled()||Thread.currentThread().isInterrupted())){progress.onPartialResult(result.snapshot());throw new InterruptedException();}}
  Result run()throws Exception{
   Result result=new Result();
   if(mediaType!=2)query(result,false);
   if(mediaType!=1)query(result,true);
-  check();
+  check(result);
   if(progress!=null)progress.onPartialResult(result.snapshot());
   Map<String,List<Item>> sizes=new HashMap<>();
   synchronized(result){for(Item item:result.all)sizes.computeIfAbsent((item.video?"v":"p")+item.size,k->new ArrayList<>()).add(item);}
   Map<String,Group> hashes=new LinkedHashMap<>();int i=0;
   for(List<Item> candidates:sizes.values())if(candidates.size()>1)for(Item item:candidates){
-   check();progress.report("檔案雜湊核對 · "+(++i)+" 個候選");
-   try{String hash=sha(item.uri);Group group=hashes.computeIfAbsent((item.video?"v":"p")+hash,k->new Group("完全重複 · SHA-256"));group.addItem(item);synchronized(result){if(group.items.size()==2)result.exact.add(group);}}
+   check(result);progress.report("檔案雜湊核對 · "+(++i)+" 個候選");
+   try{String hash=sha(item.uri,result);Group group=hashes.computeIfAbsent((item.video?"v":"p")+hash,k->new Group("完全重複 · SHA-256"));group.addItem(item);synchronized(result){if(group.items.size()==2)result.exact.add(group);}}
    catch(IOException e){synchronized(result){result.unreadable++;}}
    if(i%5==0&&progress!=null)progress.onPartialResult(result.snapshot());
   }
@@ -70,7 +70,7 @@ final class Scanner {
   try{
    int total;synchronized(result){total=result.all.size();}
    for(i=0;i<total;i++){
-    check();Item item;synchronized(result){item=result.all.get(i);}
+    check(result);Item item;synchronized(result){item=result.all.get(i);}
     progress.report("分析 "+(i+1)+" / "+total+" · "+item.name);
     try{
      analyze(item,engine,result);
@@ -133,12 +133,12 @@ final class Scanner {
   }
   String[] selectionArgs=selectionArgsList.isEmpty()?null:selectionArgsList.toArray(new String[0]);
   try(Cursor cursor=context.getContentResolver().query(base,columns,selection.toString(),selectionArgs,"date_added DESC")){
-   if(cursor==null)return;while(cursor.moveToNext()){check();Item item=new Item();item.uri=ContentUris.withAppendedId(base,cursor.getLong(0));item.name=cursor.getString(1);item.mime=cursor.getString(2);item.size=cursor.getLong(3);item.path=cursor.getString(4);item.video=video;item.duration=video?cursor.getLong(5):0;synchronized(result){result.all.add(item);}}
+   if(cursor==null)return;while(cursor.moveToNext()){check(result);Item item=new Item();item.uri=ContentUris.withAppendedId(base,cursor.getLong(0));item.name=cursor.getString(1);item.mime=cursor.getString(2);item.size=cursor.getLong(3);item.path=cursor.getString(4);item.video=video;item.duration=video?cursor.getLong(5):0;synchronized(result){result.all.add(item);}}
   }catch(SecurityException e){progress.report((video?"影片":"圖片")+"讀取權限不足");}
  }
- private String sha(Uri uri)throws IOException,InterruptedException,NoSuchAlgorithmException{
+ private String sha(Uri uri,Result result)throws IOException,InterruptedException,NoSuchAlgorithmException{
   MessageDigest digest=MessageDigest.getInstance("SHA-256");try(InputStream in=context.getContentResolver().openInputStream(uri)){
-   if(in==null)throw new IOException();byte[] buffer=new byte[262144];int count;while((count=in.read(buffer))!=-1){check();digest.update(buffer,0,count);}}
+   if(in==null)throw new IOException();byte[] buffer=new byte[262144];int count;while((count=in.read(buffer))!=-1){check(result);digest.update(buffer,0,count);}}
   StringBuilder s=new StringBuilder();for(byte b:digest.digest())s.append(String.format(Locale.US,"%02x",b&255));return s.toString();
  }
  private void analyze(Item item,FaceEngine engine,Result result)throws Exception{
@@ -147,7 +147,7 @@ final class Scanner {
   }else{MediaMetadataRetriever retriever=new MediaMetadataRetriever();try{
    retriever.setDataSource(context,item.uri);String duration=retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);if(duration!=null)item.duration=Long.parseLong(duration);
    if(item.duration<=0)throw new IOException("影片時長不可讀");item.signatures=new Similarity.Signature[7];
-   for(int n=0;n<7;n++){check();long time=(long)(item.duration*1000*(n+.5)/7);Bitmap frame=retriever.getScaledFrameAtTime(time,MediaMetadataRetriever.OPTION_CLOSEST,640,640);if(frame!=null){try{if(item.thumb==null)item.thumb=writeThumb(frame,"video");item.signatures[n]=signature(frame);faces(item,frame,engine,result);}finally{frame.recycle();}}}
+   for(int n=0;n<7;n++){check(result);long time=(long)(item.duration*1000*(n+.5)/7);Bitmap frame=retriever.getScaledFrameAtTime(time,MediaMetadataRetriever.OPTION_CLOSEST,640,640);if(frame!=null){try{if(item.thumb==null)item.thumb=writeThumb(frame,"video");item.signatures[n]=signature(frame);faces(item,frame,engine,result);}finally{frame.recycle();}}}
   }finally{retriever.release();}}
  }
  private void faces(Item item,Bitmap bitmap,FaceEngine engine,Result result){
