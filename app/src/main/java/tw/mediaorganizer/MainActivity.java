@@ -34,7 +34,9 @@ public class MainActivity extends Activity {
   root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(16),dp(8)+i.top,dp(16),dp(8)+i.bottom);return insets;});setContentView(root);
   LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
   LinearLayout headerTitles=new LinearLayout(this);headerTitles.setOrientation(1);
-  TextView title=text("相簿整理員 v1.2",22);title.setTypeface(null,1);headerTitles.addView(title);
+  String verName="1.4";
+  try{verName=getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){}
+  TextView title=text("相簿整理員 v"+verName,22);title.setTypeface(null,1);headerTitles.addView(title);
   TextView subtitle=text("離線掃描 · 邊掃邊整理 · 刪除與搬移",11);subtitle.setTextColor(ACCENT);headerTitles.addView(subtitle);
   header.addView(headerTitles,new LinearLayout.LayoutParams(0,-2,1));
   header.addView(button("⚙ 設定",this::showSettingsDialog),new LinearLayout.LayoutParams(-2,dp(38)));
@@ -239,7 +241,7 @@ public class MainActivity extends Activity {
    ArrayList<Uri> uris=new ArrayList<>();
    for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
    startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
-  }catch(Exception e){status.setText("無法取得刪除授權："+e.getMessage());pendingDeletes=null;fileBusy=false;updateSelection();}
+  }catch(Exception e){status.setText("無法取得刪除授權："+e.getMessage());pendingDeletes=null;fileBusy=false;saveScanCache(result);updateSelection();}
  }
  private void finishMoveOperation(){
   pending=null;fileBusy=false;
