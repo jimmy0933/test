@@ -27,9 +27,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public class ScanService extends Service {
     public interface ScanListener {
         void onProgress(String status);
-        void onPartialResult(Scanner.Result partial);
-        void onComplete(Scanner.Result result);
-        void onError(String message);
+        void onPartialResult(Scanner.Result partial, long generation);
+        void onComplete(Scanner.Result result, long generation);
+        void onError(String message, long generation);
     }
 
     public static final String CHANNEL_ID = "scan_service_channel";
@@ -62,7 +62,7 @@ public class ScanService extends Service {
                 listener.onProgress(currentStatus);
             }
             if (currentSnapshot != null) {
-                listener.onPartialResult(currentSnapshot);
+                listener.onPartialResult(currentSnapshot, currentScanGeneration);
             }
         }
     }
@@ -96,7 +96,7 @@ public class ScanService extends Service {
         Context appContext = context.getApplicationContext();
         currentAppContext = appContext;
 
-        long jobGen = clearCacheAsync(appContext);
+        long jobGen = currentGeneration.incrementAndGet();
         currentScanGeneration = jobGen;
 
         if (isBgScan) {
@@ -126,7 +126,7 @@ public class ScanService extends Service {
                     public void onPartialResult(Scanner.Result partial) {
                         currentSnapshot = partial;
                         ScanListener l = activeListener;
-                        if (l != null) l.onPartialResult(partial);
+                        if (l != null) l.onPartialResult(partial, jobGen);
                     }
                 }, faces, new int[]{5, 8, 12}[setting], new double[]{.72, .65, .58}[setting], filters, mediaType);
 
@@ -135,19 +135,19 @@ public class ScanService extends Service {
                 saveScanCache(appContext, scanned, jobGen);
 
                 ScanListener l = activeListener;
-                if (l != null) l.onComplete(scanned);
+                if (l != null) l.onComplete(scanned, jobGen);
             } catch (InterruptedException e) {
                 if (currentSnapshot != null) {
                     saveScanCache(appContext, currentSnapshot, jobGen);
                 }
                 ScanListener l = activeListener;
-                if (l != null) l.onError("掃描已停止，已呈現部分結果與記錄。");
+                if (l != null) l.onError("掃描已停止，已呈現部分結果與記錄。", jobGen);
             } catch (Throwable e) {
                 if (currentSnapshot != null) {
                     saveScanCache(appContext, currentSnapshot, jobGen);
                 }
                 ScanListener l = activeListener;
-                if (l != null) l.onError("掃描失敗：" + e.getClass().getSimpleName() + " · " + e.getMessage());
+                if (l != null) l.onError("掃描失敗：" + e.getClass().getSimpleName() + " · " + e.getMessage(), jobGen);
             } finally {
                 scanning = false;
                 if (isBgScan) {
@@ -164,6 +164,10 @@ public class ScanService extends Service {
 
     public static long getGeneration() {
         return currentGeneration.get();
+    }
+
+    public static long getCurrentScanGeneration() {
+        return currentScanGeneration;
     }
 
     private static void performClearCache(Context context) {
