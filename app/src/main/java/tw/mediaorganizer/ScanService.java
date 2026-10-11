@@ -61,7 +61,7 @@ public class ScanService extends Service {
             if (currentStatus != null) {
                 listener.onProgress(currentStatus);
             }
-            if (currentSnapshot != null) {
+            if (currentSnapshot != null && currentScanGeneration >= currentGeneration.get()) {
                 listener.onPartialResult(currentSnapshot, currentScanGeneration);
             }
         }

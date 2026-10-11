@@ -31,7 +31,9 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   build();
   ScanService.setListener(this);
   if(ScanService.isScanning()){
-   resultGeneration = ScanService.getCurrentScanGeneration();
+   if(ScanService.getCurrentScanGeneration()>=resultGeneration){
+    resultGeneration = ScanService.getCurrentScanGeneration();
+   }
    setBusy(true);
    status.setText("背景掃描進行中…");
   }
@@ -87,10 +89,10 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   root.addView(footer);
 
+  resultGeneration=ScanService.getGeneration();
   Scanner.Result cached=loadScanCache();
   if(cached!=null&&!cached.all.isEmpty()){
    result=cached;
-   resultGeneration=ScanService.getGeneration();
    status.setText("已載入上次記錄 · "+cached.all.size()+" 個檔案 · "+cached.exact.size()+" 組重複 · "+cached.similar.size()+" 組相似");
   }
   render();
