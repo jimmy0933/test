@@ -31,6 +31,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   build();
   ScanService.setListener(this);
   if(ScanService.isScanning()){
+   resultGeneration = ScanService.getCurrentScanGeneration();
    setBusy(true);
    status.setText("背景掃描進行中…");
   }
@@ -87,7 +88,11 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   root.addView(footer);
 
   Scanner.Result cached=loadScanCache();
-  if(cached!=null&&!cached.all.isEmpty()){result=cached;status.setText("已載入上次記錄 · "+cached.all.size()+" 個檔案 · "+cached.exact.size()+" 組重複 · "+cached.similar.size()+" 組相似");}
+  if(cached!=null&&!cached.all.isEmpty()){
+   result=cached;
+   resultGeneration=ScanService.getGeneration();
+   status.setText("已載入上次記錄 · "+cached.all.size()+" 個檔案 · "+cached.exact.size()+" 組重複 · "+cached.similar.size()+" 組相似");
+  }
   render();
  }
 
@@ -206,15 +211,19 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   });
  }
 
- public void onPartialResult(Scanner.Result partial){
+ public void onPartialResult(Scanner.Result partial, long generation){
   ui(()->{
+   if(generation<resultGeneration)return;
+   resultGeneration=generation;
    result=partial;
    render();
   });
  }
 
- public void onComplete(Scanner.Result scanned){
+ public void onComplete(Scanner.Result scanned, long generation){
   ui(()->{
+   if(generation<resultGeneration)return;
+   resultGeneration=generation;
    result=scanned;
    saveScanCache(scanned);
    setBusy(false);
@@ -231,8 +240,10 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   });
  }
 
- public void onError(String message){
+ public void onError(String message, long generation){
   ui(()->{
+   if(generation<resultGeneration)return;
+   resultGeneration=generation;
    setBusy(false);
    if(result!=null)saveScanCache(result);
    status.setText(message);
