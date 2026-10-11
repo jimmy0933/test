@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class ScanService extends Service {
     public interface ScanListener {
@@ -41,6 +42,8 @@ public class ScanService extends Service {
     private static final ExecutorService scanExecutor = Executors.newSingleThreadExecutor();
     private static final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private static final Object CACHE_LOCK = new Object();
+    private static final AtomicLong currentGeneration = new AtomicLong(0);
+    private static volatile long currentScanGeneration = 0;
 
     private static ScanListener activeListener;
     private static volatile boolean scanning = false;
@@ -87,6 +90,9 @@ public class ScanService extends Service {
         Context appContext = context.getApplicationContext();
         currentAppContext = appContext;
 
+        long jobGen = clearCacheAsync(appContext);
+        currentScanGeneration = jobGen;
+
         if (isBgScan) {
             start(appContext, currentStatus);
         }
@@ -119,19 +125,19 @@ public class ScanService extends Service {
 
                 Scanner.Result scanned = scanner.run();
                 currentSnapshot = scanned;
-                saveScanCache(appContext, scanned);
+                saveScanCache(appContext, scanned, jobGen);
 
                 ScanListener l = activeListener;
                 if (l != null) l.onComplete(scanned);
             } catch (InterruptedException e) {
                 if (currentSnapshot != null) {
-                    saveScanCache(appContext, currentSnapshot);
+                    saveScanCache(appContext, currentSnapshot, jobGen);
                 }
                 ScanListener l = activeListener;
                 if (l != null) l.onError("掃描已停止，已呈現部分結果與記錄。");
             } catch (Throwable e) {
                 if (currentSnapshot != null) {
-                    saveScanCache(appContext, currentSnapshot);
+                    saveScanCache(appContext, currentSnapshot, jobGen);
                 }
                 ScanListener l = activeListener;
                 if (l != null) l.onError("掃描失敗：" + e.getClass().getSimpleName() + " · " + e.getMessage());
@@ -148,10 +154,49 @@ public class ScanService extends Service {
         return new File(context.getFilesDir(), "scan-cache.json");
     }
 
+    public static long getGeneration() {
+        return currentGeneration.get();
+    }
+
+    public static long clearCacheAsync(Context context) {
+        long gen = currentGeneration.incrementAndGet();
+        if (context != null) {
+            Context appContext = context.getApplicationContext();
+            ioExecutor.execute(() -> {
+                synchronized (CACHE_LOCK) {
+                    File directory = new File(appContext.getCacheDir(), "thumbs");
+                    File[] files = directory.listFiles();
+                    if (files != null) {
+                        for (File f : files) {
+                            f.delete();
+                        }
+                    }
+                    File cache = cacheFile(appContext);
+                    if (cache.exists()) {
+                        cache.delete();
+                    }
+                    File tmp = new File(appContext.getFilesDir(), "scan-cache.tmp");
+                    if (tmp.exists()) {
+                        tmp.delete();
+                    }
+                }
+            });
+        }
+        return gen;
+    }
+
     public static void saveScanCache(Context context, Scanner.Result res) {
+        saveScanCache(context, res, currentGeneration.get());
+    }
+
+    public static void saveScanCache(Context context, Scanner.Result res, long generation) {
         if (res == null || context == null) return;
+        Context appContext = context.getApplicationContext();
         ioExecutor.execute(() -> {
             synchronized (CACHE_LOCK) {
+                if (generation != currentGeneration.get()) {
+                    return;
+                }
                 try {
                     JSONObject root = new JSONObject();
                     JSONArray all = new JSONArray();
@@ -251,7 +296,7 @@ public class ScanService extends Service {
     public void onTimeout(int startId) {
         cancelScan();
         if (currentSnapshot != null && currentAppContext != null) {
-            saveScanCache(currentAppContext, currentSnapshot);
+            saveScanCache(currentAppContext, currentSnapshot, currentScanGeneration);
         }
         releaseWakeLock();
         stopForeground(true);
