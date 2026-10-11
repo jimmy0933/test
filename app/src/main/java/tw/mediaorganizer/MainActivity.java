@@ -449,31 +449,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){
   if(res==null)return;
-  fileWorker.execute(()->{
-   try{
-    JSONObject root=new JSONObject();JSONArray all=new JSONArray();Map<Scanner.Item,Integer> itemMap=new HashMap<>();
-    synchronized(res){
-     for(int i=0;i<res.all.size();i++){
-      Scanner.Item item=res.all.get(i);itemMap.put(item,i);
-      JSONObject o=new JSONObject();o.put("uri",item.uri.toString());o.put("name",item.name);o.put("mime",item.mime);o.put("path",item.path);o.put("size",item.size);o.put("duration",item.duration);o.put("video",item.video);o.put("removed",item.removed);
-      if(item.thumb!=null)o.put("thumb",item.thumb.getAbsolutePath());all.put(o);
-     }
-     root.put("all",all);root.put("exact",groupsToJson(res.exact,itemMap));root.put("similar",groupsToJson(res.similar,itemMap));root.put("people",groupsToJson(res.people,itemMap));root.put("unreadable",res.unreadable);root.put("faceFailures",res.faceFailures);root.put("faceError",res.faceError);
-    }
-    File tmp=new File(getFilesDir(),"scan-cache.tmp");
-    try(FileOutputStream out=new FileOutputStream(tmp)){out.write(root.toString().getBytes("UTF-8"));out.getFD().sync();}
-    tmp.renameTo(cacheFile());
-   }catch(Exception e){}
-  });
- }
- private JSONArray groupsToJson(List<Scanner.Group> groups,Map<Scanner.Item,Integer> itemMap)throws Exception{
-  JSONArray arr=new JSONArray();
-  for(Scanner.Group g:groups){
-   JSONObject o=new JSONObject();o.put("title",g.title);if(g.face!=null)o.put("face",g.face.getAbsolutePath());
-   JSONArray items=new JSONArray();synchronized(g){for(Scanner.Item item:g.items){Integer idx=itemMap.get(item);if(idx!=null)items.put(idx);}}
-   o.put("items",items);arr.put(o);
-  }
-  return arr;
+  ScanService.saveScanCache(this, res);
  }
  private Scanner.Result loadScanCache(){
   if(!cacheFile().exists())return null;
