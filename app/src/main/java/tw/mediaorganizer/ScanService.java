@@ -11,7 +11,29 @@ import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 public class ScanService extends Service {
+    public interface ScanListener {
+        void onProgress(String status);
+        void onPartialResult(Scanner.Result partial);
+        void onComplete(Scanner.Result result);
+        void onError(String message);
+    }
+
     public static final String CHANNEL_ID = "scan_service_channel";
     public static final int NOTIFICATION_ID = 1001;
     public static final String ACTION_START = "ACTION_START";
@@ -19,7 +41,152 @@ public class ScanService extends Service {
     public static final String ACTION_UPDATE = "ACTION_UPDATE";
     public static final String EXTRA_TEXT = "EXTRA_TEXT";
 
+    private static final ExecutorService scanExecutor = Executors.newSingleThreadExecutor();
+    private static ScanListener activeListener;
+    private static volatile boolean scanning = false;
+    private static volatile boolean cancelled = false;
+
     private PowerManager.WakeLock wakeLock;
+
+    public static synchronized void setListener(ScanListener listener) {
+        activeListener = listener;
+    }
+
+    public static synchronized void removeListener(ScanListener listener) {
+        if (activeListener == listener) {
+            activeListener = null;
+        }
+    }
+
+    public static boolean isScanning() {
+        return scanning;
+    }
+
+    public static void cancelScan() {
+        cancelled = true;
+    }
+
+    public static void startScanJob(Context context, boolean isBgScan, boolean faces, int setting, int mediaType, Set<String> filters) {
+        if (scanning) return;
+        scanning = true;
+        cancelled = false;
+
+        Context appContext = context.getApplicationContext();
+
+        if (isBgScan) {
+            start(appContext, "掃描中，可即時查看結果與進行處理…");
+        }
+
+        scanExecutor.execute(() -> {
+            Scanner.Result lastResult = null;
+            try {
+                Scanner scanner = new Scanner(appContext, new Scanner.Progress() {
+                    @Override
+                    public boolean cancelled() {
+                        return cancelled;
+                    }
+
+                    @Override
+                    public void report(String s) {
+                        if (isBgScan) {
+                            update(appContext, s);
+                        }
+                        ScanListener l = activeListener;
+                        if (l != null) l.onProgress(s);
+                    }
+
+                    @Override
+                    public void onPartialResult(Scanner.Result partial) {
+                        ScanListener l = activeListener;
+                        if (l != null) l.onPartialResult(partial);
+                    }
+                }, faces, new int[]{5, 8, 12}[setting], new double[]{.72, .65, .58}[setting], filters, mediaType);
+
+                Scanner.Result scanned = scanner.run();
+                lastResult = scanned;
+                saveScanCache(appContext, scanned);
+
+                ScanListener l = activeListener;
+                if (l != null) l.onComplete(scanned);
+            } catch (InterruptedException e) {
+                if (lastResult != null) {
+                    saveScanCache(appContext, lastResult);
+                }
+                ScanListener l = activeListener;
+                if (l != null) l.onError("掃描已停止，已呈現部分結果與記錄。");
+            } catch (Throwable e) {
+                ScanListener l = activeListener;
+                if (l != null) l.onError("掃描失敗：" + e.getClass().getSimpleName() + " · " + e.getMessage());
+            } finally {
+                scanning = false;
+                if (isBgScan) {
+                    stop(appContext);
+                }
+            }
+        });
+    }
+
+    private static File cacheFile(Context context) {
+        return new File(context.getFilesDir(), "scan-cache.json");
+    }
+
+    public static void saveScanCache(Context context, Scanner.Result res) {
+        if (res == null) return;
+        try {
+            JSONObject root = new JSONObject();
+            JSONArray all = new JSONArray();
+            Map<Scanner.Item, Integer> itemMap = new HashMap<>();
+            synchronized (res) {
+                for (int i = 0; i < res.all.size(); i++) {
+                    Scanner.Item item = res.all.get(i);
+                    itemMap.put(item, i);
+                    JSONObject o = new JSONObject();
+                    o.put("uri", item.uri.toString());
+                    o.put("name", item.name);
+                    o.put("mime", item.mime);
+                    o.put("path", item.path);
+                    o.put("size", item.size);
+                    o.put("duration", item.duration);
+                    o.put("video", item.video);
+                    o.put("removed", item.removed);
+                    if (item.thumb != null) o.put("thumb", item.thumb.getAbsolutePath());
+                    all.put(o);
+                }
+                root.put("all", all);
+                root.put("exact", groupsToJson(res.exact, itemMap));
+                root.put("similar", groupsToJson(res.similar, itemMap));
+                root.put("people", groupsToJson(res.people, itemMap));
+                root.put("unreadable", res.unreadable);
+                root.put("faceFailures", res.faceFailures);
+                root.put("faceError", res.faceError);
+            }
+            File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(root.toString().getBytes("UTF-8"));
+                out.getFD().sync();
+            }
+            tmp.renameTo(cacheFile(context));
+        } catch (Exception e) {}
+    }
+
+    private static JSONArray groupsToJson(List<Scanner.Group> groups, Map<Scanner.Item, Integer> itemMap) throws Exception {
+        JSONArray arr = new JSONArray();
+        for (Scanner.Group g : groups) {
+            JSONObject o = new JSONObject();
+            o.put("title", g.title);
+            if (g.face != null) o.put("face", g.face.getAbsolutePath());
+            JSONArray items = new JSONArray();
+            synchronized (g) {
+                for (Scanner.Item item : g.items) {
+                    Integer idx = itemMap.get(item);
+                    if (idx != null) items.put(idx);
+                }
+            }
+            o.put("items", items);
+            arr.put(o);
+        }
+        return arr;
+    }
 
     @Override
     public void onCreate() {
@@ -53,6 +220,17 @@ public class ScanService extends Service {
             }
         }
         return START_NOT_STICKY;
+    }
+
+    public void onTimeout(int startId) {
+        cancelScan();
+        releaseWakeLock();
+        stopForeground(true);
+        stopSelf(startId);
+    }
+
+    public void onTimeout(int startId, int fgsType) {
+        onTimeout(startId);
     }
 
     private void acquireWakeLock() {

@@ -13,19 +13,28 @@ import java.util.concurrent.*;
 import java.io.*;
 import org.json.*;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements ScanService.ScanListener {
  private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3;
  private LinearLayout root,list;private TextView status,selection,srcLabel;private CheckBox people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
- private final ExecutorService scanWorker=Executors.newSingleThreadExecutor();
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
- private volatile boolean cancelled,dead,busy,fileBusy;private Scanner.Result result;
+ private volatile boolean dead,busy,fileBusy;private Scanner.Result result;
  private final LinkedHashSet<Scanner.Item> selected=new LinkedHashSet<>();private int mode=0,limit=20;
  private List<MoveRecord> pending;private boolean undoing;private String destination;private long lastProgress;
  private boolean isDeleting;private List<Scanner.Item> pendingDeletes;
  private final Set<String> sourceFilters=new TreeSet<>();
 
  private static final class MoveRecord {Uri uri;String oldPath,oldName,newPath,newName;Scanner.Item item;}
- public void onCreate(Bundle saved){super.onCreate(saved);getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);build();}
+ public void onCreate(Bundle saved){
+  super.onCreate(saved);
+  getWindow().setStatusBarColor(BG);getWindow().setNavigationBarColor(BG);
+  build();
+  ScanService.setListener(this);
+  if(ScanService.isScanning()){
+   setBusy(true);
+   status.setText("背景掃描進行中…");
+  }
+ }
+
  private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density);}
  private TextView text(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextColor(TEXT);t.setTextSize(size);t.setPadding(0,dp(5),0,dp(5));return t;}
  private Button button(String s,Runnable r){Button b=new Button(this);b.setText(s);b.setTextColor(TEXT);b.setAllCaps(false);b.setOnClickListener(v->r.run());return b;}
@@ -60,7 +69,10 @@ public class MainActivity extends Activity {
 
   srcLabel=text(" 來源：全部媒體",12);
 
-  LinearLayout actions=new LinearLayout(this);scan=button("開始掃描",this::requestScan);cancel=button("停止",()->{cancelled=true;status.setText("正在停止，已完成的掃描結果已保留…");});cancel.setEnabled(false);actions.addView(scan,new LinearLayout.LayoutParams(0,dp(48),1));actions.addView(cancel,new LinearLayout.LayoutParams(dp(80),dp(48)));root.addView(actions);
+  LinearLayout actions=new LinearLayout(this);scan=button("開始掃描",this::requestScan);cancel=button("停止",()->{
+   ScanService.cancelScan();
+   status.setText("正在停止，已完成的掃描結果已保留…");
+  });cancel.setEnabled(false);actions.addView(scan,new LinearLayout.LayoutParams(0,dp(48),1));actions.addView(cancel,new LinearLayout.LayoutParams(dp(80),dp(48)));root.addView(actions);
 
   status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);root.addView(status);
   LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);tabs.addView(tab,new LinearLayout.LayoutParams(0,dp(44),1));}root.addView(tabs);
@@ -116,6 +128,17 @@ public class MainActivity extends Activity {
  }
 
  private boolean permission(String p){return checkSelfPermission(p)==PackageManager.PERMISSION_GRANTED;}
+ private boolean hasMediaPermission(){
+  int mediaType=mediaTypeSpinner.getSelectedItemPosition();
+  if(Build.VERSION.SDK_INT>=33){
+   if(mediaType==1)return permission("android.permission.READ_MEDIA_IMAGES")||permission("android.permission.READ_MEDIA_VISUAL_USER_SELECTED");
+   if(mediaType==2)return permission("android.permission.READ_MEDIA_VIDEO")||permission("android.permission.READ_MEDIA_VISUAL_USER_SELECTED");
+   return (permission("android.permission.READ_MEDIA_IMAGES")||permission("android.permission.READ_MEDIA_VISUAL_USER_SELECTED")) &&
+          (permission("android.permission.READ_MEDIA_VIDEO")||permission("android.permission.READ_MEDIA_VISUAL_USER_SELECTED"));
+  }
+  return permission("android.permission.READ_EXTERNAL_STORAGE");
+ }
+
  private void requestScan(){
   if(busy||fileBusy)return;int mediaType=mediaTypeSpinner.getSelectedItemPosition();
   ArrayList<String> perms=new ArrayList<>();
@@ -134,21 +157,89 @@ public class MainActivity extends Activity {
   }
   startScan();
  }
- public void onRequestPermissionsResult(int code,String[] perms,int[] grants){super.onRequestPermissionsResult(code,perms,grants);if(code==41){boolean granted=false;for(int g:grants)if(g==PackageManager.PERMISSION_GRANTED)granted=true;if(granted)startScan();else status.setText("尚未取得媒體權限；請重新掃描並授權。");}}
- private void setBusy(boolean b){busy=b;scan.setEnabled(!b&&!fileBusy);cancel.setEnabled(b);people.setEnabled(!b);bgScan.setEnabled(!b);strictness.setEnabled(!b);mediaTypeSpinner.setEnabled(!b);move.setEnabled(!selected.isEmpty()&&!fileBusy);deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}
- private void startScan(){
-  selected.clear();result=new Scanner.Result();render();setBusy(true);cancelled=false;status.setText("掃描中，可即時查看結果與進行處理…");final boolean faces=people.isChecked();final boolean isBgScan=bgScan.isChecked();final int setting=strictness.getSelectedItemPosition();final int mediaType=mediaTypeSpinner.getSelectedItemPosition();final Set<String> snapshotFilters=new HashSet<>(sourceFilters);lastProgress=0;
-  if(isBgScan){ScanService.start(this,"掃描中，可即時查看結果與進行處理…");}
-  scanWorker.execute(()->{try{clearThumbs();
-    Scanner scanner=new Scanner(this,new Scanner.Progress(){
-     public boolean cancelled(){return cancelled||dead;}
-     public void report(String s){long now=System.currentTimeMillis();if(now-lastProgress<250)return;lastProgress=now;ui(()->status.setText(s));if(isBgScan)ScanService.update(MainActivity.this,s);}
-     public void onPartialResult(Scanner.Result partial){ui(()->{result=partial;render();});}
-    },faces,new int[]{5,8,12}[setting],new double[]{.72,.65,.58}[setting],snapshotFilters,mediaType);
-    Scanner.Result scanned=scanner.run();
-    ui(()->{result=scanned;saveScanCache(scanned);setBusy(false);if(isBgScan)ScanService.stop(this);boolean full=Build.VERSION.SDK_INT<33||((mediaType!=2?permission("android.permission.READ_MEDIA_IMAGES"):true)&&(mediaType!=1?permission("android.permission.READ_MEDIA_VIDEO"):true));String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";if(!sourceFilters.isEmpty())summary+=" (來源: 已選 "+sourceFilters.size()+" 個資料夾)";if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;status.setText(summary);render();});
-   }catch(InterruptedException e){ui(()->{saveScanCache(result);setBusy(false);if(isBgScan)ScanService.stop(this);status.setText("掃描已停止，已呈現部分結果與記錄。");render();});}catch(Exception|LinkageError e){ui(()->{setBusy(false);if(isBgScan)ScanService.stop(this);status.setText("掃描失敗："+e.getClass().getSimpleName()+" · "+e.getMessage());});}});
+
+ public void onRequestPermissionsResult(int code,String[] perms,int[] grants){
+  super.onRequestPermissionsResult(code,perms,grants);
+  if(code==41){
+   if(hasMediaPermission()){
+    startScan();
+   }else{
+    status.setText("尚未取得媒體權限；請重新掃描並授權。");
+   }
+  }
  }
+
+ private void setBusy(boolean b){
+  busy=b;
+  scan.setEnabled(!b&&!fileBusy);
+  cancel.setEnabled(b);
+  people.setEnabled(!b);
+  bgScan.setEnabled(!b);
+  strictness.setEnabled(!b);
+  mediaTypeSpinner.setEnabled(!b);
+  move.setEnabled(!selected.isEmpty()&&!fileBusy);
+  deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);
+  if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+ }
+
+ private void startScan(){
+  selected.clear();result=new Scanner.Result();render();setBusy(true);
+  status.setText("掃描中，可即時查看結果與進行處理…");
+  final boolean faces=people.isChecked();
+  final boolean isBgScan=bgScan.isChecked();
+  final int setting=strictness.getSelectedItemPosition();
+  final int mediaType=mediaTypeSpinner.getSelectedItemPosition();
+  final Set<String> snapshotFilters=new HashSet<>(sourceFilters);
+  lastProgress=0;
+
+  clearThumbs();
+  ScanService.startScanJob(this, isBgScan, faces, setting, mediaType, snapshotFilters);
+ }
+
+ public void onProgress(String s){
+  ui(()->{
+   long now=System.currentTimeMillis();
+   if(now-lastProgress<250)return;
+   lastProgress=now;
+   status.setText(s);
+  });
+ }
+
+ public void onPartialResult(Scanner.Result partial){
+  ui(()->{
+   result=partial;
+   render();
+  });
+ }
+
+ public void onComplete(Scanner.Result scanned){
+  ui(()->{
+   result=scanned;
+   saveScanCache(scanned);
+   setBusy(false);
+   int mediaType=mediaTypeSpinner.getSelectedItemPosition();
+   boolean full=Build.VERSION.SDK_INT<33||((mediaType!=2?permission("android.permission.READ_MEDIA_IMAGES"):true)&&(mediaType!=1?permission("android.permission.READ_MEDIA_VIDEO"):true));
+   String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";
+   if(!sourceFilters.isEmpty())summary+=" (來源: 已選 "+sourceFilters.size()+" 個資料夾)";
+   if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";
+   if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";
+   if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";
+   if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;
+   status.setText(summary);
+   render();
+  });
+ }
+
+ public void onError(String message){
+  ui(()->{
+   setBusy(false);
+   if(result!=null)saveScanCache(result);
+   status.setText(message);
+   render();
+  });
+ }
+
  private void ui(Runnable r){if(!dead)runOnUiThread(()->{if(!dead)r.run();});}
  private void render(){
   list.removeAllViews();updateSelection();if(result==null||result.all.isEmpty()){list.addView(text("先掃描，再選擇要整理的群組。\n完全重複：檔案內容一致\n相似：畫面接近，仍須人工查看\n人物：抽樣人臉特徵接近，不保證同一人\n註：掃描過程中即可勾選刪除或搬移！",15));return;}
@@ -356,7 +447,7 @@ public class MainActivity extends Activity {
  private void help(){new AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setNegativeButton("關閉",null).setPositiveButton("清除縮圖快取",(d,w)->{selected.clear();result=null;fileWorker.execute(()->{clearThumbs();ui(()->{status.setText("縮圖快取已清除，請重新掃描。");render();});});}).show();}
  private void clearThumbs(){File directory=new File(getCacheDir(),"thumbs");File[] files=directory.listFiles();if(files!=null)for(File f:files)f.delete();cacheFile().delete();}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
- private void saveScanCache(Scanner.Result res){
+ public void saveScanCache(Scanner.Result res){
   if(res==null)return;
   fileWorker.execute(()->{
    try{
@@ -408,9 +499,9 @@ public class MainActivity extends Activity {
   return list;
  }
  protected void onDestroy(){
-  dead=true;cancelled=true;
-  if(bgScan!=null&&bgScan.isChecked())ScanService.stop(this);
-  scanWorker.shutdownNow();fileWorker.shutdownNow();
+  dead=true;
+  ScanService.removeListener(this);
+  fileWorker.shutdownNow();
   super.onDestroy();
  }
 }
