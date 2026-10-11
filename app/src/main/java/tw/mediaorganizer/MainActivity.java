@@ -222,11 +222,11 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
 
  public void onComplete(Scanner.Result scanned, long generation){
   ui(()->{
+   setBusy(false);
    if(generation<resultGeneration)return;
    resultGeneration=generation;
    result=scanned;
    saveScanCache(scanned);
-   setBusy(false);
    int mediaType=mediaTypeSpinner.getSelectedItemPosition();
    boolean full=Build.VERSION.SDK_INT<33||((mediaType!=2?permission("android.permission.READ_MEDIA_IMAGES"):true)&&(mediaType!=1?permission("android.permission.READ_MEDIA_VIDEO"):true));
    String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";
@@ -242,9 +242,9 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
 
  public void onError(String message, long generation){
   ui(()->{
+   setBusy(false);
    if(generation<resultGeneration)return;
    resultGeneration=generation;
-   setBusy(false);
    if(result!=null)saveScanCache(result);
    status.setText(message);
    render();
@@ -379,21 +379,32 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
      status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
      render();
     }else{
-     try{
-      ArrayList<Uri> uris=new ArrayList<>();
-      for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
-      startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
-     }catch(Exception e){
-      status.setText("刪除已完成（直接刪除 "+operationDeleted+" 個，需要授權或失敗 "+pendingDeletes.size()+" 個）");
-      pendingDeletes=null;
-      fileBusy=false;
-      saveScanCache(result);
-      updateSelection();
-      render();
-     }
+     requestDeleteBatch();
     }
    });
   });
+ }
+ private void requestDeleteBatch(){
+  if(pendingDeletes==null||pendingDeletes.isEmpty()){
+   fileBusy=false;
+   saveScanCache(result);
+   updateSelection();
+   status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
+   render();
+   return;
+  }
+  try{
+   ArrayList<Uri> uris=new ArrayList<>();
+   for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
+   startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
+  }catch(Exception e){
+   status.setText("刪除已完成（直接刪除 "+operationDeleted+" 個，需要授權或失敗 "+pendingDeletes.size()+" 個）");
+   pendingDeletes=null;
+   fileBusy=false;
+   saveScanCache(result);
+   updateSelection();
+   render();
+  }
  }
  private void finishMoveOperation(){
   pending=null;fileBusy=false;
@@ -422,6 +433,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{
    status.setText("未獲刪除授權 · 已完成：成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed+"。未授權之檔案已保留。");
    if(operationDeleted>0)saveScanCache(result);
+   pendingDeletes=null;
    fileBusy=false;updateSelection();render();
   }}
  }
@@ -433,7 +445,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   pendingDeletes.removeAll(batch);
   operationDeleted+=batch.size();
   if(pendingDeletes!=null&&!pendingDeletes.isEmpty()){
-   requestDelete();
+   requestDeleteBatch();
   }else{
    pendingDeletes=null;
    fileBusy=false;
