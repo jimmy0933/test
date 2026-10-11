@@ -14,11 +14,8 @@ import android.os.PowerManager;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -42,14 +39,27 @@ public class ScanService extends Service {
     public static final String EXTRA_TEXT = "EXTRA_TEXT";
 
     private static final ExecutorService scanExecutor = Executors.newSingleThreadExecutor();
+    private static final Object CACHE_LOCK = new Object();
+
     private static ScanListener activeListener;
     private static volatile boolean scanning = false;
     private static volatile boolean cancelled = false;
+    private static volatile Scanner.Result currentSnapshot;
+    private static volatile String currentStatus = "掃描中，可即時查看結果與進行處理…";
+    private static Context currentAppContext;
 
     private PowerManager.WakeLock wakeLock;
 
     public static synchronized void setListener(ScanListener listener) {
         activeListener = listener;
+        if (listener != null && scanning) {
+            if (currentStatus != null) {
+                listener.onProgress(currentStatus);
+            }
+            if (currentSnapshot != null) {
+                listener.onPartialResult(currentSnapshot);
+            }
+        }
     }
 
     public static synchronized void removeListener(ScanListener listener) {
@@ -70,15 +80,17 @@ public class ScanService extends Service {
         if (scanning) return;
         scanning = true;
         cancelled = false;
+        currentSnapshot = null;
+        currentStatus = "掃描中，可即時查看結果與進行處理…";
 
         Context appContext = context.getApplicationContext();
+        currentAppContext = appContext;
 
         if (isBgScan) {
-            start(appContext, "掃描中，可即時查看結果與進行處理…");
+            start(appContext, currentStatus);
         }
 
         scanExecutor.execute(() -> {
-            Scanner.Result lastResult = null;
             try {
                 Scanner scanner = new Scanner(appContext, new Scanner.Progress() {
                     @Override
@@ -88,6 +100,7 @@ public class ScanService extends Service {
 
                     @Override
                     public void report(String s) {
+                        currentStatus = s;
                         if (isBgScan) {
                             update(appContext, s);
                         }
@@ -97,24 +110,28 @@ public class ScanService extends Service {
 
                     @Override
                     public void onPartialResult(Scanner.Result partial) {
+                        currentSnapshot = partial;
                         ScanListener l = activeListener;
                         if (l != null) l.onPartialResult(partial);
                     }
                 }, faces, new int[]{5, 8, 12}[setting], new double[]{.72, .65, .58}[setting], filters, mediaType);
 
                 Scanner.Result scanned = scanner.run();
-                lastResult = scanned;
+                currentSnapshot = scanned;
                 saveScanCache(appContext, scanned);
 
                 ScanListener l = activeListener;
                 if (l != null) l.onComplete(scanned);
             } catch (InterruptedException e) {
-                if (lastResult != null) {
-                    saveScanCache(appContext, lastResult);
+                if (currentSnapshot != null) {
+                    saveScanCache(appContext, currentSnapshot);
                 }
                 ScanListener l = activeListener;
                 if (l != null) l.onError("掃描已停止，已呈現部分結果與記錄。");
             } catch (Throwable e) {
+                if (currentSnapshot != null) {
+                    saveScanCache(appContext, currentSnapshot);
+                }
                 ScanListener l = activeListener;
                 if (l != null) l.onError("掃描失敗：" + e.getClass().getSimpleName() + " · " + e.getMessage());
             } finally {
@@ -131,42 +148,48 @@ public class ScanService extends Service {
     }
 
     public static void saveScanCache(Context context, Scanner.Result res) {
-        if (res == null) return;
-        try {
-            JSONObject root = new JSONObject();
-            JSONArray all = new JSONArray();
-            Map<Scanner.Item, Integer> itemMap = new HashMap<>();
-            synchronized (res) {
-                for (int i = 0; i < res.all.size(); i++) {
-                    Scanner.Item item = res.all.get(i);
-                    itemMap.put(item, i);
-                    JSONObject o = new JSONObject();
-                    o.put("uri", item.uri.toString());
-                    o.put("name", item.name);
-                    o.put("mime", item.mime);
-                    o.put("path", item.path);
-                    o.put("size", item.size);
-                    o.put("duration", item.duration);
-                    o.put("video", item.video);
-                    o.put("removed", item.removed);
-                    if (item.thumb != null) o.put("thumb", item.thumb.getAbsolutePath());
-                    all.put(o);
+        if (res == null || context == null) return;
+        synchronized (CACHE_LOCK) {
+            try {
+                JSONObject root = new JSONObject();
+                JSONArray all = new JSONArray();
+                Map<Scanner.Item, Integer> itemMap = new HashMap<>();
+                synchronized (res) {
+                    for (int i = 0; i < res.all.size(); i++) {
+                        Scanner.Item item = res.all.get(i);
+                        itemMap.put(item, i);
+                        JSONObject o = new JSONObject();
+                        o.put("uri", item.uri.toString());
+                        o.put("name", item.name);
+                        o.put("mime", item.mime);
+                        o.put("path", item.path);
+                        o.put("size", item.size);
+                        o.put("duration", item.duration);
+                        o.put("video", item.video);
+                        o.put("removed", item.removed);
+                        if (item.thumb != null) o.put("thumb", item.thumb.getAbsolutePath());
+                        all.put(o);
+                    }
+                    root.put("all", all);
+                    root.put("exact", groupsToJson(res.exact, itemMap));
+                    root.put("similar", groupsToJson(res.similar, itemMap));
+                    root.put("people", groupsToJson(res.people, itemMap));
+                    root.put("unreadable", res.unreadable);
+                    root.put("faceFailures", res.faceFailures);
+                    root.put("faceError", res.faceError);
                 }
-                root.put("all", all);
-                root.put("exact", groupsToJson(res.exact, itemMap));
-                root.put("similar", groupsToJson(res.similar, itemMap));
-                root.put("people", groupsToJson(res.people, itemMap));
-                root.put("unreadable", res.unreadable);
-                root.put("faceFailures", res.faceFailures);
-                root.put("faceError", res.faceError);
-            }
-            File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
-            try (FileOutputStream out = new FileOutputStream(tmp)) {
-                out.write(root.toString().getBytes("UTF-8"));
-                out.getFD().sync();
-            }
-            tmp.renameTo(cacheFile(context));
-        } catch (Exception e) {}
+                File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
+                try (FileOutputStream out = new FileOutputStream(tmp)) {
+                    out.write(root.toString().getBytes("UTF-8"));
+                    out.getFD().sync();
+                }
+                File target = cacheFile(context);
+                if (!tmp.renameTo(target)) {
+                    if (target.exists()) target.delete();
+                    tmp.renameTo(target);
+                }
+            } catch (Exception e) {}
+        }
     }
 
     private static JSONArray groupsToJson(List<Scanner.Group> groups, Map<Scanner.Item, Integer> itemMap) throws Exception {
@@ -224,6 +247,9 @@ public class ScanService extends Service {
 
     public void onTimeout(int startId) {
         cancelScan();
+        if (currentSnapshot != null && currentAppContext != null) {
+            saveScanCache(currentAppContext, currentSnapshot);
+        }
         releaseWakeLock();
         stopForeground(true);
         stopSelf(startId);
