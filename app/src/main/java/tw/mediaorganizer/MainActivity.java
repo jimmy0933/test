@@ -330,31 +330,13 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   fileBusy=true;
   operationDeleted=operationDeleteFailed=0;
   updateSelection();
-  performInitialDirectDelete();
+  requestDelete();
  }
  private void requestDelete(){
   if(pendingDeletes==null||pendingDeletes.isEmpty()){
    fileBusy=false;updateSelection();
    status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
    render();
-   return;
-  }
-  try{
-   ArrayList<Uri> uris=new ArrayList<>();
-   for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
-   startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
-  }catch(Exception e){
-   status.setText("刪除已完成（直接刪除 "+operationDeleted+" 個，需要授權或失敗 "+pendingDeletes.size()+" 個）");
-   pendingDeletes=null;
-   fileBusy=false;
-   saveScanCache(result);
-   updateSelection();
-   render();
-  }
- }
- private void performInitialDirectDelete(){
-  if(pendingDeletes==null||pendingDeletes.isEmpty()){
-   requestDelete();
    return;
   }
   fileWorker.execute(()->{
@@ -386,7 +368,18 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
      status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
      render();
     }else{
-     requestDelete();
+     try{
+      ArrayList<Uri> uris=new ArrayList<>();
+      for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
+      startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
+     }catch(Exception e){
+      status.setText("刪除已完成（直接刪除 "+operationDeleted+" 個，需要授權或失敗 "+pendingDeletes.size()+" 個）");
+      pendingDeletes=null;
+      fileBusy=false;
+      saveScanCache(result);
+      updateSelection();
+      render();
+     }
     }
    });
   });
@@ -397,97 +390,6 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
    if(operationMoved==0)restoreJournalBackup();else clearJournalBackup();
    saveScanCache(result);
   }else{
-   result=null;selected.clear();clearThumbs();
-  }
-  updateSelection();
-  render();
- }
- private void requestWrite(){if(pending==null||pending.isEmpty()){
-  status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));
-  finishMoveOperation();
-  operationHasSuccess=false;operationMoved=operationFailed=0;
-  return;
- }
-  try{ArrayList<Uri> uris=new ArrayList<>();for(int i=0;i<Math.min(100,pending.size());i++)uris.add(pending.get(i).uri);startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),uris).getIntentSender(),51,null,0,0,0);}catch(Exception e){status.setText("無法取得移動授權："+e.getMessage());finishMoveOperation();}}
- public void onActivityResult(int request,int response,Intent data){super.onActivityResult(request,response,data);
-  if(request==51){if(response==RESULT_OK)applyBatch();else{
-   status.setText("未獲授權 · 已完成：成功 "+operationMoved+" · 失敗 "+operationFailed+"。未授權之檔案已保留可重試。");
-   finishMoveOperation();
-   operationHasSuccess=false;operationMoved=operationFailed=0;
-  }}
-  else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{
-   status.setText("未獲刪除授權 · 已完成：成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed+"。未授權之檔案已保留。");
-   if(operationDeleted>0)saveScanCache(result);
-   fileBusy=false;updateSelection();render();
-  }}
- }
- private int operationDeleted=0,operationDeleteFailed=0;
- private void applyDeleteBatch(){
-  if(pendingDeletes==null)return;
-  final List<Scanner.Item> batch=new ArrayList<>(pendingDeletes.subList(0,Math.min(100,pendingDeletes.size())));
-  for(Scanner.Item item:batch){item.removed=true;selected.remove(item);}
-  pendingDeletes.removeAll(batch);
-  operationDeleted+=batch.size();
-  if(pendingDeletes!=null&&!pendingDeletes.isEmpty()){
-   requestDelete();
-  }else{
-   pendingDeletes=null;
-   fileBusy=false;
-   saveScanCache(result);
-   status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
-   render();
-  }
- }
- private boolean operationHasSuccess=false;private int operationMoved=0,operationFailed=0;
- private void applyBatch(){
-  if(pending==null)return;final List<MoveRecord> batch=new ArrayList<>(pending.subList(0,Math.min(100,pending.size())));
-  fileWorker.execute(()->{int moved=0,failed=0;List<MoveRecord> successfulRecords=new ArrayList<>();for(MoveRecord r:batch){if(dead)break;try{
-    if(r.newPath==null||r.newPath.isEmpty()||(!undoing&&(r.oldPath==null||r.oldPath.isEmpty())))throw new IOException("原資料夾紀錄不完整");String finalName=collision(r.uri,r.newPath,r.newName)?uniqueName(r.newName):r.newName;
-    ContentValues values=new ContentValues();values.put(MediaStore.MediaColumns.RELATIVE_PATH,r.newPath);values.put(MediaStore.MediaColumns.DISPLAY_NAME,finalName);
-    if(!undoing){if(!operationHasSuccess){writeJournal(new JSONArray());operationHasSuccess=true;}appendJournal(r);}
-    int updated=getContentResolver().update(r.uri,values,null,null);if(updated!=1)throw new IOException("檔案更新失敗");moved++;
-    if(undoing){removeJournal(r.uri);}
-    if(r.item!=null){r.item.removed=true;}
-    successfulRecords.add(r);
-   }catch(Exception e){failed++;}}
-   final int m=moved,f=failed;ui(()->{operationMoved+=m;operationFailed+=f;
-    if(pending!=null)pending.removeAll(batch);
-    if(!undoing)for(MoveRecord r:successfulRecords)if(r.item!=null)selected.remove(r.item);
-    if(pending!=null&&!pending.isEmpty()){status.setText("已處理 "+(operationMoved+operationFailed)+" 個（成功 "+operationMoved+"），繼續下一批…");requestWrite();}
-    else{
-     status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));
-     finishMoveOperation();
-     operationHasSuccess=false;operationMoved=operationFailed=0;
-    }});
-  });
- }
- private boolean collision(Uri self,String path,String name){try(android.database.Cursor c=getContentResolver().query(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),new String[]{"_id"},"relative_path = ? AND _display_name = ?",new String[]{path,name},null)){if(c!=null)while(c.moveToNext())if(c.getLong(0)!=ContentUris.parseId(self))return true;}return false;}
- private String uniqueName(String name){int i=name.lastIndexOf('.');String id="_"+UUID.randomUUID().toString().substring(0,8);return i>0?name.substring(0,i)+id+name.substring(i):name+id;}
- private File journal(){return new File(getFilesDir(),"move-journal.json");}
- private File journalBackup(){return new File(getFilesDir(),"move-journal-backup.json");}
- private synchronized void backupJournal(){
-  File j=journal(), b=journalBackup();
-  if(j.exists()){
-   try(InputStream in=new FileInputStream(j); FileOutputStream out=new FileOutputStream(b)){
-    byte[] buf=new byte[4096]; int n;
-    while((n=in.read(buf))>0) out.write(buf,0,n);
-    out.getFD().sync();
-   }catch(Exception e){}
-  }
- }
- private synchronized void restoreJournalBackup(){
-  File j=journal(), b=journalBackup();
-  if(b.exists()){
-   if(j.exists())j.delete();
-   b.renameTo(j);
-  }
- }
- private synchronized void clearJournalBackup(){journalBackup().delete();}
- private synchronized JSONArray readJournal()throws Exception{if(!journal().exists())return new JSONArray();try(InputStream in=new FileInputStream(journal())){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);return new JSONArray(out.toString("UTF-8"));}}
- private synchronized void writeJournal(JSONArray a)throws Exception{File tmp=new File(getFilesDir(),"move-journal.tmp");try(FileOutputStream out=new FileOutputStream(tmp)){out.write(a.toString().getBytes("UTF-8"));out.getFD().sync();}if(!tmp.renameTo(journal()))throw new IOException("復原紀錄儲存失敗");}
- private synchronized void appendJournal(MoveRecord r)throws Exception{JSONArray a=readJournal();JSONObject o=new JSONObject();o.put("uri",r.uri.toString());o.put("path",r.oldPath);o.put("name",r.oldName);a.put(o);writeJournal(a);}
- private synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
- private void undo(){if(fileBusy||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{pending=new ArrayList<>();for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");pending.add(r);}undoing=true;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
  private void help(){new AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setNegativeButton("關閉",null).setPositiveButton("清除縮圖快取",(d,w)->{selected.clear();result=null;clearThumbs();status.setText("縮圖快取已清除，請重新掃描。");render();}).show();}
  private void clearThumbs(){resultGeneration = ScanService.clearCacheAsync(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
