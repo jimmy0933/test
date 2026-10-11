@@ -81,8 +81,8 @@ public class ScanService extends Service {
         cancelled = true;
     }
 
-    public static void startScanJob(Context context, boolean isBgScan, boolean faces, int setting, int mediaType, Set<String> filters) {
-        if (scanning) return;
+    public static long startScanJob(Context context, boolean isBgScan, boolean faces, int setting, int mediaType, Set<String> filters) {
+        if (scanning) return currentScanGeneration;
         scanning = true;
         cancelled = false;
         currentSnapshot = null;
@@ -105,6 +105,7 @@ public class ScanService extends Service {
 
         scanExecutor.execute(() -> {
             try {
+                performClearCache(appContext);
                 Scanner scanner = new Scanner(appContext, new Scanner.Progress() {
                     @Override
                     public boolean cancelled() {
@@ -154,6 +155,7 @@ public class ScanService extends Service {
                 }
             }
         });
+        return jobGen;
     }
 
     private static File cacheFile(Context context) {
@@ -164,29 +166,32 @@ public class ScanService extends Service {
         return currentGeneration.get();
     }
 
+    private static void performClearCache(Context context) {
+        if (context == null) return;
+        synchronized (CACHE_LOCK) {
+            File directory = new File(context.getCacheDir(), "thumbs");
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    f.delete();
+                }
+            }
+            File cache = cacheFile(context);
+            if (cache.exists()) {
+                cache.delete();
+            }
+            File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
+            if (tmp.exists()) {
+                tmp.delete();
+            }
+        }
+    }
+
     public static long clearCacheAsync(Context context) {
         long gen = currentGeneration.incrementAndGet();
         if (context != null) {
             Context appContext = context.getApplicationContext();
-            ioExecutor.execute(() -> {
-                synchronized (CACHE_LOCK) {
-                    File directory = new File(appContext.getCacheDir(), "thumbs");
-                    File[] files = directory.listFiles();
-                    if (files != null) {
-                        for (File f : files) {
-                            f.delete();
-                        }
-                    }
-                    File cache = cacheFile(appContext);
-                    if (cache.exists()) {
-                        cache.delete();
-                    }
-                    File tmp = new File(appContext.getFilesDir(), "scan-cache.tmp");
-                    if (tmp.exists()) {
-                        tmp.delete();
-                    }
-                }
-            });
+            ioExecutor.execute(() -> performClearCache(appContext));
         }
         return gen;
     }

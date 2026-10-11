@@ -22,6 +22,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  private List<MoveRecord> pending;private boolean undoing;private String destination;private long lastProgress;
  private boolean isDeleting;private List<Scanner.Item> pendingDeletes;
  private final Set<String> sourceFilters=new TreeSet<>();
+ private long resultGeneration;
 
  private static final class MoveRecord {Uri uri;String oldPath,oldName,newPath,newName;Scanner.Item item;}
  public void onCreate(Bundle saved){
@@ -168,7 +169,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   final Set<String> snapshotFilters=new HashSet<>(sourceFilters);
   lastProgress=0;
 
-  ScanService.startScanJob(this, isBgScan, faces, setting, mediaType, snapshotFilters);
+  resultGeneration = ScanService.startScanJob(this, isBgScan, faces, setting, mediaType, snapshotFilters);
  }
 
  public void onRequestPermissionsResult(int code,String[] perms,int[] grants){
@@ -390,11 +391,11 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
    saveScanCache(result);
   }else{
  private void help(){new AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setNegativeButton("關閉",null).setPositiveButton("清除縮圖快取",(d,w)->{selected.clear();result=null;clearThumbs();status.setText("縮圖快取已清除，請重新掃描。");render();}).show();}
- private void clearThumbs(){ScanService.clearCacheAsync(this);}
+ private void clearThumbs(){resultGeneration = ScanService.clearCacheAsync(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){
   if(res==null)return;
-  ScanService.saveScanCache(this, res);
+  ScanService.saveScanCache(this, res, resultGeneration);
  }
  private Scanner.Result loadScanCache(){
   if(!cacheFile().exists())return null;
