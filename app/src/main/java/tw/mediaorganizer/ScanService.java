@@ -47,6 +47,7 @@ public class ScanService extends Service {
     private static volatile boolean cancelled = false;
     private static volatile Scanner.Result currentSnapshot;
     private static volatile String currentStatus = "掃描中，可即時查看結果與進行處理…";
+    private static volatile long scanGeneration = 0;
     private static Context currentAppContext;
 
     private PowerManager.WakeLock wakeLock;
@@ -84,6 +85,11 @@ public class ScanService extends Service {
         currentSnapshot = null;
         currentStatus = "掃描中，可即時查看結果與進行處理…";
 
+        final long gen;
+        synchronized (CACHE_LOCK) {
+            gen = ++scanGeneration;
+        }
+
         Context appContext = context.getApplicationContext();
         currentAppContext = appContext;
 
@@ -119,19 +125,19 @@ public class ScanService extends Service {
 
                 Scanner.Result scanned = scanner.run();
                 currentSnapshot = scanned;
-                saveScanCache(appContext, scanned);
+                saveScanCache(appContext, scanned, gen);
 
                 ScanListener l = activeListener;
                 if (l != null) l.onComplete(scanned);
             } catch (InterruptedException e) {
                 if (currentSnapshot != null) {
-                    saveScanCache(appContext, currentSnapshot);
+                    saveScanCache(appContext, currentSnapshot, gen);
                 }
                 ScanListener l = activeListener;
                 if (l != null) l.onError("掃描已停止，已呈現部分結果與記錄。");
             } catch (Throwable e) {
                 if (currentSnapshot != null) {
-                    saveScanCache(appContext, currentSnapshot);
+                    saveScanCache(appContext, currentSnapshot, gen);
                 }
                 ScanListener l = activeListener;
                 if (l != null) l.onError("掃描失敗：" + e.getClass().getSimpleName() + " · " + e.getMessage());
@@ -149,9 +155,14 @@ public class ScanService extends Service {
     }
 
     public static void saveScanCache(Context context, Scanner.Result res) {
+        saveScanCache(context, res, scanGeneration);
+    }
+
+    public static void saveScanCache(Context context, Scanner.Result res, long gen) {
         if (res == null || context == null) return;
         ioExecutor.execute(() -> {
             synchronized (CACHE_LOCK) {
+                if (gen < scanGeneration) return;
                 try {
                     JSONObject root = new JSONObject();
                     JSONArray all = new JSONArray();
@@ -190,6 +201,24 @@ public class ScanService extends Service {
                         if (target.exists()) target.delete();
                         tmp.renameTo(target);
                     }
+                } catch (Exception e) {}
+            }
+        });
+    }
+
+    public static void clearCache(Context context) {
+        if (context == null) return;
+        synchronized (CACHE_LOCK) {
+            scanGeneration++;
+            currentSnapshot = null;
+        }
+        ioExecutor.execute(() -> {
+            synchronized (CACHE_LOCK) {
+                try {
+                    File target = cacheFile(context);
+                    if (target.exists()) target.delete();
+                    File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
+                    if (tmp.exists()) tmp.delete();
                 } catch (Exception e) {}
             }
         });

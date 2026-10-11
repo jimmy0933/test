@@ -353,7 +353,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
    if(operationMoved==0)restoreJournalBackup();else clearJournalBackup();
    saveScanCache(result);
   }else{
-   result=null;selected.clear();cacheFile().delete();
+   result=null;selected.clear();ScanService.clearCache(this);
   }
   updateSelection();
   render();
@@ -445,7 +445,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  private synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
  private void undo(){if(fileBusy||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{pending=new ArrayList<>();for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");pending.add(r);}undoing=true;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
  private void help(){new AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setNegativeButton("關閉",null).setPositiveButton("清除縮圖快取",(d,w)->{selected.clear();result=null;fileWorker.execute(()->{clearThumbs();ui(()->{status.setText("縮圖快取已清除，請重新掃描。");render();});});}).show();}
- private void clearThumbs(){File directory=new File(getCacheDir(),"thumbs");File[] files=directory.listFiles();if(files!=null)for(File f:files)f.delete();cacheFile().delete();}
+ private void clearThumbs(){File directory=new File(getCacheDir(),"thumbs");File[] files=directory.listFiles();if(files!=null)for(File f:files)f.delete();ScanService.clearCache(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){
   if(res==null)return;
