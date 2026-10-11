@@ -100,3 +100,13 @@ jobs:
           fi
           git commit -m "Package signed APK and verification results"
           git push origin "HEAD:$GITHUB_REF_NAME"
+
+      - name: Upload APK to Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+        with:
+          tag_name: latest-build
+          name: Latest APK Build
+          files: dist/Media-Organizer.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
