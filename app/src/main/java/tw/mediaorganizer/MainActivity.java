@@ -324,14 +324,12 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  private void confirmDelete(){
   if(selected.isEmpty()||fileBusy)return;
   ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
-  new AlertDialog.Builder(this).setTitle("確認刪除 "+snapshot.size()+" 個檔案").setMessage("警告：刪除後檔案將直接由系統移除，無法透過本程式復原！\n請確定要刪除這些勾選的媒體檔案。").setNegativeButton("取消",null).setPositiveButton("刪除",(d,w)->{
-   pendingDeletes=snapshot;
-   isDeleting=true;
-   fileBusy=true;
-   operationDeleted=operationDeleteFailed=0;
-   updateSelection();
-   requestDelete();
-  }).show();
+  pendingDeletes=snapshot;
+  isDeleting=true;
+  fileBusy=true;
+  operationDeleted=operationDeleteFailed=0;
+  updateSelection();
+  requestDelete();
  }
  private void requestDelete(){
   if(pendingDeletes==null||pendingDeletes.isEmpty()){
@@ -340,11 +338,50 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
    render();
    return;
   }
-  try{
-   ArrayList<Uri> uris=new ArrayList<>();
-   for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
-   startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
-  }catch(Exception e){status.setText("無法取得刪除授權："+e.getMessage());pendingDeletes=null;fileBusy=false;saveScanCache(result);updateSelection();}
+  fileWorker.execute(()->{
+   List<Scanner.Item> directList=new ArrayList<>(pendingDeletes);
+   List<Scanner.Item> needPermissionList=new ArrayList<>();
+   int directDeleted=0;
+   for(Scanner.Item item:directList){
+    try{
+     int count=getContentResolver().delete(item.uri,null,null);
+     if(count>0){
+      item.removed=true;
+      ui(()->selected.remove(item));
+      directDeleted++;
+     }else{
+      needPermissionList.add(item);
+     }
+    }catch(Exception e){
+     needPermissionList.add(item);
+    }
+   }
+   final int dDeleted=directDeleted;
+   ui(()->{
+    operationDeleted+=dDeleted;
+    pendingDeletes=needPermissionList;
+    if(pendingDeletes.isEmpty()){
+     fileBusy=false;
+     saveScanCache(result);
+     updateSelection();
+     status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
+     render();
+    }else{
+     try{
+      ArrayList<Uri> uris=new ArrayList<>();
+      for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
+      startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
+     }catch(Exception e){
+      status.setText("刪除已完成（直接刪除 "+operationDeleted+" 個，需要授權或失敗 "+pendingDeletes.size()+" 個）");
+      pendingDeletes=null;
+      fileBusy=false;
+      saveScanCache(result);
+      updateSelection();
+      render();
+     }
+    }
+   });
+  });
  }
  private void finishMoveOperation(){
   pending=null;fileBusy=false;
