@@ -15,7 +15,7 @@ import org.json.*;
 
 public class MainActivity extends Activity {
  private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3;
- private LinearLayout root,list;private TextView status,selection,srcLabel;private CheckBox people;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
+ private LinearLayout root,list;private TextView status,selection,srcLabel;private CheckBox people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService scanWorker=Executors.newSingleThreadExecutor();
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean cancelled,dead,busy,fileBusy;private Scanner.Result result;
@@ -43,6 +43,9 @@ public class MainActivity extends Activity {
   root.addView(header);
 
   people=new CheckBox(this);people.setChecked(true);
+  bgScan=new CheckBox(this);bgScan.setChecked(getPreferences(0).getBoolean("bg_scan",false));
+  bgScan.setOnCheckedChangeListener((v,checked)->getPreferences(0).edit().putBoolean("bg_scan",checked).apply());
+
   mediaTypeSpinner=new Spinner(this);
   String[] mediaTypes={"全部","僅照片","僅影片"};
   ArrayAdapter<String> mediaAdapter=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,mediaTypes){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};
@@ -115,30 +118,36 @@ public class MainActivity extends Activity {
  private boolean permission(String p){return checkSelfPermission(p)==PackageManager.PERMISSION_GRANTED;}
  private void requestScan(){
   if(busy||fileBusy)return;int mediaType=mediaTypeSpinner.getSelectedItemPosition();
+  ArrayList<String> perms=new ArrayList<>();
   if(Build.VERSION.SDK_INT>=33){
-   ArrayList<String> perms=new ArrayList<>();
    if(mediaType!=2&&!permission("android.permission.READ_MEDIA_IMAGES"))perms.add("android.permission.READ_MEDIA_IMAGES");
    if(mediaType!=1&&!permission("android.permission.READ_MEDIA_VIDEO"))perms.add("android.permission.READ_MEDIA_VIDEO");
-   if(!perms.isEmpty()){
-    if(Build.VERSION.SDK_INT>=34)perms.add("android.permission.READ_MEDIA_VISUAL_USER_SELECTED");
-    requestPermissions(perms.toArray(new String[0]),41);return;
-   }
+   if(Build.VERSION.SDK_INT>=34&&!perms.isEmpty())perms.add("android.permission.READ_MEDIA_VISUAL_USER_SELECTED");
+  }else if(!permission("android.permission.READ_EXTERNAL_STORAGE")){
+   perms.add("android.permission.READ_EXTERNAL_STORAGE");
   }
-  else if(!permission("android.permission.READ_EXTERNAL_STORAGE")){requestPermissions(new String[]{"android.permission.READ_EXTERNAL_STORAGE"},41);return;}startScan();
+  if(bgScan.isChecked()&&Build.VERSION.SDK_INT>=33&&!permission("android.permission.POST_NOTIFICATIONS")){
+   perms.add("android.permission.POST_NOTIFICATIONS");
+  }
+  if(!perms.isEmpty()){
+   requestPermissions(perms.toArray(new String[0]),41);return;
+  }
+  startScan();
  }
  public void onRequestPermissionsResult(int code,String[] perms,int[] grants){super.onRequestPermissionsResult(code,perms,grants);if(code==41){boolean granted=false;for(int g:grants)if(g==PackageManager.PERMISSION_GRANTED)granted=true;if(granted)startScan();else status.setText("尚未取得媒體權限；請重新掃描並授權。");}}
- private void setBusy(boolean b){busy=b;scan.setEnabled(!b&&!fileBusy);cancel.setEnabled(b);people.setEnabled(!b);strictness.setEnabled(!b);mediaTypeSpinner.setEnabled(!b);move.setEnabled(!selected.isEmpty()&&!fileBusy);deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}
+ private void setBusy(boolean b){busy=b;scan.setEnabled(!b&&!fileBusy);cancel.setEnabled(b);people.setEnabled(!b);bgScan.setEnabled(!b);strictness.setEnabled(!b);mediaTypeSpinner.setEnabled(!b);move.setEnabled(!selected.isEmpty()&&!fileBusy);deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);if(b)getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}
  private void startScan(){
-  selected.clear();result=new Scanner.Result();render();setBusy(true);cancelled=false;status.setText("掃描中，可即時查看結果與進行處理…");final boolean faces=people.isChecked();final int setting=strictness.getSelectedItemPosition();final int mediaType=mediaTypeSpinner.getSelectedItemPosition();final Set<String> snapshotFilters=new HashSet<>(sourceFilters);lastProgress=0;
+  selected.clear();result=new Scanner.Result();render();setBusy(true);cancelled=false;status.setText("掃描中，可即時查看結果與進行處理…");final boolean faces=people.isChecked();final boolean isBgScan=bgScan.isChecked();final int setting=strictness.getSelectedItemPosition();final int mediaType=mediaTypeSpinner.getSelectedItemPosition();final Set<String> snapshotFilters=new HashSet<>(sourceFilters);lastProgress=0;
+  if(isBgScan){ScanService.start(this,"掃描中，可即時查看結果與進行處理…");}
   scanWorker.execute(()->{try{clearThumbs();
     Scanner scanner=new Scanner(this,new Scanner.Progress(){
      public boolean cancelled(){return cancelled||dead;}
-     public void report(String s){long now=System.currentTimeMillis();if(now-lastProgress<250)return;lastProgress=now;ui(()->status.setText(s));}
+     public void report(String s){long now=System.currentTimeMillis();if(now-lastProgress<250)return;lastProgress=now;ui(()->status.setText(s));if(isBgScan)ScanService.update(MainActivity.this,s);}
      public void onPartialResult(Scanner.Result partial){ui(()->{result=partial;render();});}
     },faces,new int[]{5,8,12}[setting],new double[]{.72,.65,.58}[setting],snapshotFilters,mediaType);
     Scanner.Result scanned=scanner.run();
-    ui(()->{result=scanned;saveScanCache(scanned);setBusy(false);boolean full=Build.VERSION.SDK_INT<33||((mediaType!=2?permission("android.permission.READ_MEDIA_IMAGES"):true)&&(mediaType!=1?permission("android.permission.READ_MEDIA_VIDEO"):true));String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";if(!sourceFilters.isEmpty())summary+=" (來源: 已選 "+sourceFilters.size()+" 個資料夾)";if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;status.setText(summary);render();});
-   }catch(InterruptedException e){ui(()->{saveScanCache(result);setBusy(false);status.setText("掃描已停止，已呈現部分結果與記錄。");render();});}catch(Exception|LinkageError e){ui(()->{setBusy(false);status.setText("掃描失敗："+e.getClass().getSimpleName()+" · "+e.getMessage());});}});
+    ui(()->{result=scanned;saveScanCache(scanned);setBusy(false);if(isBgScan)ScanService.stop(this);boolean full=Build.VERSION.SDK_INT<33||((mediaType!=2?permission("android.permission.READ_MEDIA_IMAGES"):true)&&(mediaType!=1?permission("android.permission.READ_MEDIA_VIDEO"):true));String summary="完成 · "+scanned.all.size()+" 個檔案 · "+scanned.exact.size()+" 組重複 · "+scanned.similar.size()+" 組相似 · "+scanned.people.size()+" 組人物";if(!sourceFilters.isEmpty())summary+=" (來源: 已選 "+sourceFilters.size()+" 個資料夾)";if(!full)summary+="\n目前只有部分媒體授權；結果不涵蓋全手機。";if(scanned.unreadable>0)summary+="\n讀取／解碼失敗 "+scanned.unreadable+" 次";if(scanned.faceFailures>0)summary+="\n人物分析失敗 "+scanned.faceFailures+" 個畫面";if(!scanned.faceError.isEmpty())summary+="\n"+scanned.faceError;status.setText(summary);render();});
+   }catch(InterruptedException e){ui(()->{saveScanCache(result);setBusy(false);if(isBgScan)ScanService.stop(this);status.setText("掃描已停止，已呈現部分結果與記錄。");render();});}catch(Exception|LinkageError e){ui(()->{setBusy(false);if(isBgScan)ScanService.stop(this);status.setText("掃描失敗："+e.getClass().getSimpleName()+" · "+e.getMessage());});}});
  }
  private void ui(Runnable r){if(!dead)runOnUiThread(()->{if(!dead)r.run();});}
  private void render(){
@@ -165,6 +174,10 @@ public class MainActivity extends Activity {
   people.setText("同時分析人物（較耗時）");people.setTextColor(TEXT);
   if(people.getParent()!=null)((android.view.ViewGroup)people.getParent()).removeView(people);
   layout.addView(people);
+
+  bgScan.setText("背景鎖屏繼續掃描 (前台服務/WakeLock)");bgScan.setTextColor(TEXT);
+  if(bgScan.getParent()!=null)((android.view.ViewGroup)bgScan.getParent()).removeView(bgScan);
+  layout.addView(bgScan);
 
   LinearLayout mBox=new LinearLayout(this);mBox.setGravity(Gravity.CENTER_VERTICAL);
   mBox.addView(text("媒體種類：",12));
@@ -394,5 +407,10 @@ public class MainActivity extends Activity {
   }
   return list;
  }
- protected void onDestroy(){dead=true;cancelled=true;scanWorker.shutdownNow();fileWorker.shutdownNow();super.onDestroy();}
+ protected void onDestroy(){
+  dead=true;cancelled=true;
+  if(bgScan!=null&&bgScan.isChecked())ScanService.stop(this);
+  scanWorker.shutdownNow();fileWorker.shutdownNow();
+  super.onDestroy();
+ }
 }
