@@ -200,10 +200,98 @@ public class ScanAndDeleteTest {
         }
     }
 
+    static class MockScanService {
+        long currentGeneration = 0;
+        long currentScanGeneration = 0;
+        boolean scanning = false;
+        Object currentSnapshot = null;
+
+        long clearCacheAsync() {
+            return ++currentGeneration;
+        }
+
+        long startScanJob() {
+            scanning = true;
+            currentSnapshot = null;
+            long gen = ++currentGeneration;
+            currentScanGeneration = gen;
+            return gen;
+        }
+
+        void setListener(MockActivityListener listener) {
+            if (listener != null && scanning) {
+                if (currentSnapshot != null && currentScanGeneration >= currentGeneration) {
+                    listener.onPartialResult(currentSnapshot, currentScanGeneration);
+                }
+            }
+        }
+    }
+
+    interface MockActivityListener {
+        void onPartialResult(Object partial, long generation);
+        void onComplete(Object scanned, long generation);
+    }
+
+    static class MockRecreatedActivity implements MockActivityListener {
+        long resultGeneration;
+        Object currentResult = null;
+        boolean busy = false;
+
+        void onCreate(MockScanService service) {
+            this.resultGeneration = service.currentGeneration;
+            service.setListener(this);
+            if (service.scanning) {
+                if (service.currentScanGeneration >= this.resultGeneration) {
+                    this.resultGeneration = service.currentScanGeneration;
+                }
+                this.busy = true;
+            }
+        }
+
+        @Override
+        public void onPartialResult(Object partial, long generation) {
+            if (generation < resultGeneration) return;
+            resultGeneration = generation;
+            currentResult = partial;
+        }
+
+        @Override
+        public void onComplete(Object scanned, long generation) {
+            busy = false;
+            if (generation < resultGeneration) return;
+            resultGeneration = generation;
+            currentResult = scanned;
+        }
+    }
+
+    public static void testRecreateActivityAfterClearCacheWithBackgroundScan() {
+        MockScanService service = new MockScanService();
+        long scanGen = service.startScanJob();
+
+        Object partialResult = new Object();
+        service.currentSnapshot = partialResult;
+
+        long clearCacheGen = service.clearCacheAsync();
+        check(clearCacheGen > scanGen, "clear cache incremented currentGeneration");
+
+        MockRecreatedActivity newActivity = new MockRecreatedActivity();
+        newActivity.onCreate(service);
+
+        check(newActivity.resultGeneration == clearCacheGen, "recreated activity maintained higher clearCache generation");
+        check(newActivity.currentResult == null, "stale snapshot was not replayed or accepted by recreated activity");
+
+        Object staleCompleteResult = new Object();
+        newActivity.onComplete(staleCompleteResult, scanGen);
+
+        check(newActivity.currentResult == null, "stale complete scan result ignored by recreated activity");
+        check(!newActivity.busy, "busy state reset upon completion");
+    }
+
     public static void main(String[] args) {
         testScanClearCacheOnComplete();
         testScanClearCacheOnError();
         testBatchDeleteDirectDeleteLimit();
+        testRecreateActivityAfterClearCacheWithBackgroundScan();
         System.out.println(checks + " scan and delete tests passed successfully!");
     }
 }
