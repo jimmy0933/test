@@ -32,27 +32,30 @@ public class MainActivity extends Activity {
  private void build(){
   root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(BG);root.setPadding(dp(16),dp(12),dp(16),dp(8));
   root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(16),dp(8)+i.top,dp(16),dp(8)+i.bottom);return insets;});setContentView(root);
-  TextView title=text("相簿整理員 v1.2",27);title.setTypeface(null,1);root.addView(title);TextView subtitle=text("離線掃描 · 邊掃邊整理 · 刪除與搬移",12);subtitle.setTextColor(ACCENT);root.addView(subtitle);
+  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
+  LinearLayout headerTitles=new LinearLayout(this);headerTitles.setOrientation(1);
+  TextView title=text("相簿整理員 v1.2",22);title.setTypeface(null,1);headerTitles.addView(title);
+  TextView subtitle=text("離線掃描 · 邊掃邊整理 · 刪除與搬移",11);subtitle.setTextColor(ACCENT);headerTitles.addView(subtitle);
+  header.addView(headerTitles,new LinearLayout.LayoutParams(0,-2,1));
+  header.addView(button("⚙ 設定",this::showSettingsDialog),new LinearLayout.LayoutParams(-2,dp(38)));
+  root.addView(header);
 
-  LinearLayout srcBox=new LinearLayout(this);srcBox.setGravity(Gravity.CENTER_VERTICAL);
-  srcBox.addView(button("選擇來源資料夾",this::selectSourceFolder),new LinearLayout.LayoutParams(-2,dp(42)));
-  srcLabel=text(" 來源：全部媒體",12);
-  srcBox.addView(srcLabel,new LinearLayout.LayoutParams(0,-2,1));
-  root.addView(srcBox);
-
-  people=new CheckBox(this);people.setText("同時分析人物（較耗時）");people.setTextColor(TEXT);people.setChecked(true);root.addView(people);
-  LinearLayout actions=new LinearLayout(this);scan=button("開始掃描",this::requestScan);cancel=button("停止",()->{cancelled=true;status.setText("正在停止，已完成的掃描結果已保留…");});cancel.setEnabled(false);actions.addView(scan,new LinearLayout.LayoutParams(0,dp(48),1));actions.addView(cancel,new LinearLayout.LayoutParams(dp(80),dp(48)));root.addView(actions);
-
-  LinearLayout opts=new LinearLayout(this);opts.setGravity(Gravity.CENTER_VERTICAL);
-  opts.addView(text("媒體",12));
+  people=new CheckBox(this);people.setChecked(true);
   mediaTypeSpinner=new Spinner(this);
   String[] mediaTypes={"全部","僅照片","僅影片"};
   ArrayAdapter<String> mediaAdapter=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,mediaTypes){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};
   mediaAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
   mediaTypeSpinner.setAdapter(mediaAdapter);
-  opts.addView(mediaTypeSpinner);
 
-  opts.addView(text("  相似程度",12));strictness=new Spinner(this);String[] labels={"嚴格（建議）","一般","寬鬆（較多誤判）"};ArrayAdapter<String> adapter=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,labels){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);strictness.setAdapter(adapter);opts.addView(strictness);root.addView(opts);
+  strictness=new Spinner(this);
+  String[] labels={"嚴格（建議）","一般","寬鬆（較多誤判）"};
+  ArrayAdapter<String> adapter=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,labels){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};
+  adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+  strictness.setAdapter(adapter);
+
+  srcLabel=text(" 來源：全部媒體",12);
+
+  LinearLayout actions=new LinearLayout(this);scan=button("開始掃描",this::requestScan);cancel=button("停止",()->{cancelled=true;status.setText("正在停止，已完成的掃描結果已保留…");});cancel.setEnabled(false);actions.addView(scan,new LinearLayout.LayoutParams(0,dp(48),1));actions.addView(cancel,new LinearLayout.LayoutParams(dp(80),dp(48)));root.addView(actions);
 
   status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);root.addView(status);
   LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);tabs.addView(tab,new LinearLayout.LayoutParams(0,dp(44),1));}root.addView(tabs);
@@ -65,7 +68,6 @@ public class MainActivity extends Activity {
   footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   root.addView(footer);
 
-  LinearLayout tools=new LinearLayout(this);tools.addView(button("復原上次移動",this::undo),new LinearLayout.LayoutParams(0,dp(42),1));tools.addView(button("說明／清除快取",this::help),new LinearLayout.LayoutParams(0,dp(42),1));root.addView(tools);
   Scanner.Result cached=loadScanCache();
   if(cached!=null&&!cached.all.isEmpty()){result=cached;status.setText("已載入上次記錄 · "+cached.all.size()+" 個檔案 · "+cached.exact.size()+" 組重複 · "+cached.similar.size()+" 組相似");}
   render();
@@ -145,12 +147,43 @@ public class MainActivity extends Activity {
    if(displayed++>=limit)break;LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(10),dp(9),dp(10),dp(9));card.setBackgroundColor(CARD);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.setMargins(0,0,0,dp(10));list.addView(card,cp);
    TextView title=text(group.title+" · "+active.size()+" 個",14);title.setTypeface(null,1);card.addView(title);
    if(mode==2&&group.face!=null){ImageView face=new ImageView(this);face.setImageBitmap(BitmapFactory.decodeFile(group.face.getPath()));card.addView(face,new LinearLayout.LayoutParams(dp(72),dp(72)));card.addView(text("此分組只代表至少一張抽樣人臉接近；多人、側臉或模糊畫面可能誤判。",11));}
-   LinearLayout tools=new LinearLayout(this);tools.addView(button("勾選整組",()->{selected.addAll(active);render();}),new LinearLayout.LayoutParams(0,dp(40),1));tools.addView(button("取消此組",()->{selected.removeAll(active);render();}),new LinearLayout.LayoutParams(0,dp(40),1));card.addView(tools);
-   int count=0;for(Scanner.Item item:active){if(count++>=12){card.addView(text("大型群組：先顯示 12 個，可勾選整組。全部頁面可逐檔查看。",11));break;}LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);CheckBox box=new CheckBox(this);box.setChecked(selected.contains(item));box.setOnCheckedChangeListener((v,checked)->{if(checked)selected.add(item);else selected.remove(item);updateSelection();});row.addView(box,new LinearLayout.LayoutParams(dp(40),dp(60)));ImageView thumb=new ImageView(this);thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);if(item.thumb!=null)thumb.setImageBitmap(smallThumb(item.thumb));row.addView(thumb,new LinearLayout.LayoutParams(dp(64),dp(64)));thumb.setOnClickListener(v->preview(item));TextView label=text((item.video?"▶ ":"")+item.name+"\n"+format(item.size)+(item.video?" · "+item.duration/1000+" 秒":"")+"\n"+item.path,11);label.setOnClickListener(v->preview(item));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.setMargins(dp(8),0,0,0);row.addView(label,lp);card.addView(row);}
+   LinearLayout tools=new LinearLayout(this);tools.addView(button("勾選整組",()->{if(active.size()>1)selected.addAll(active.subList(1,active.size()));render();}),new LinearLayout.LayoutParams(0,dp(40),1));tools.addView(button("取消此組",()->{selected.removeAll(active);render();}),new LinearLayout.LayoutParams(0,dp(40),1));card.addView(tools);
+   int count=0;for(Scanner.Item item:active){if(count++>=12){card.addView(text("大型群組：先顯示 12 個，可勾選整組。全部頁面可逐檔查看。",11));break;}LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);CheckBox box=new CheckBox(this);box.setChecked(selected.contains(item));box.setOnCheckedChangeListener((v,checked)->{if(checked)selected.add(item);else selected.remove(item);updateSelection();});row.addView(box,new LinearLayout.LayoutParams(dp(40),dp(96)));ImageView thumb=new ImageView(this);thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);if(item.thumb!=null)thumb.setImageBitmap(smallThumb(item.thumb));row.addView(thumb,new LinearLayout.LayoutParams(dp(96),dp(96)));thumb.setOnClickListener(v->preview(item));TextView label=text((item.video?"▶ ":"")+item.name+"\n"+format(item.size)+(item.video?" · "+item.duration/1000+" 秒":"")+"\n"+item.path,11);label.setOnClickListener(v->preview(item));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.setMargins(dp(8),0,0,0);row.addView(label,lp);card.addView(row);}
   }
   if(displayed>limit)list.addView(button("顯示更多群組",()->{limit+=20;render();}));if(displayed==0)list.addView(text(mode==2?"沒有跨檔案的人物群組。需有清楚正面人臉；人物分析選項須在掃描前啟用。":"此分類尚無符合項目。",15));
  }
- private Bitmap smallThumb(File file){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=2;return BitmapFactory.decodeFile(file.getPath(),options);}
+ private Bitmap smallThumb(File file){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;return BitmapFactory.decodeFile(file.getPath(),options);}
+ private void showSettingsDialog(){
+  LinearLayout layout=new LinearLayout(this);layout.setOrientation(1);layout.setPadding(dp(16),dp(12),dp(16),dp(12));
+  Button srcBtn=button("選擇來源資料夾",this::selectSourceFolder);
+  layout.addView(srcBtn,new LinearLayout.LayoutParams(-1,dp(42)));
+  if(srcLabel.getParent()!=null)((android.view.ViewGroup)srcLabel.getParent()).removeView(srcLabel);
+  layout.addView(srcLabel,new LinearLayout.LayoutParams(-1,-2));
+
+  people.setText("同時分析人物（較耗時）");people.setTextColor(TEXT);
+  if(people.getParent()!=null)((android.view.ViewGroup)people.getParent()).removeView(people);
+  layout.addView(people);
+
+  LinearLayout mBox=new LinearLayout(this);mBox.setGravity(Gravity.CENTER_VERTICAL);
+  mBox.addView(text("媒體種類：",12));
+  if(mediaTypeSpinner.getParent()!=null)((android.view.ViewGroup)mediaTypeSpinner.getParent()).removeView(mediaTypeSpinner);
+  mBox.addView(mediaTypeSpinner,new LinearLayout.LayoutParams(-1,-2));
+  layout.addView(mBox);
+
+  LinearLayout sBox=new LinearLayout(this);sBox.setGravity(Gravity.CENTER_VERTICAL);
+  sBox.addView(text("相似程度：",12));
+  if(strictness.getParent()!=null)((android.view.ViewGroup)strictness.getParent()).removeView(strictness);
+  sBox.addView(strictness,new LinearLayout.LayoutParams(-1,-2));
+  layout.addView(sBox);
+
+  Button undoBtn=button("復原上次移動",this::undo);
+  layout.addView(undoBtn,new LinearLayout.LayoutParams(-1,dp(42)));
+
+  Button helpBtn=button("說明／清除快取",this::help);
+  layout.addView(helpBtn,new LinearLayout.LayoutParams(-1,dp(42)));
+
+  new AlertDialog.Builder(this).setTitle("設定與工具").setView(layout).setPositiveButton("確定",null).show();
+ }
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
  private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(scan!=null)scan.setEnabled(!busy&&!fileBusy);if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}
  private void preview(Scanner.Item item){try{Intent intent=new Intent(Intent.ACTION_VIEW);intent.setDataAndType(item.uri,item.mime!=null?item.mime:item.video?"video/*":"image/*");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(intent);}catch(ActivityNotFoundException e){new AlertDialog.Builder(this).setMessage("手機沒有可開啟此媒體的應用程式。").setPositiveButton("確定",null).show();}}
@@ -229,7 +262,7 @@ public class MainActivity extends Activity {
  public void onActivityResult(int request,int response,Intent data){super.onActivityResult(request,response,data);
   if(request==51){if(response==RESULT_OK)applyBatch();else{
    status.setText("未獲授權 · 已完成：成功 "+operationMoved+" · 失敗 "+operationFailed+"。未授權之檔案已保留可重試。");
-   finishMoveOperation();
+   fileBusy=false;updateSelection();render();
    operationHasSuccess=false;operationMoved=operationFailed=0;
   }}
   else if(request==52){if(response==RESULT_OK)applyDeleteBatch();else{
