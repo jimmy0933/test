@@ -39,6 +39,7 @@ public class ScanService extends Service {
     public static final String EXTRA_TEXT = "EXTRA_TEXT";
 
     private static final ExecutorService scanExecutor = Executors.newSingleThreadExecutor();
+    private static final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
     private static final Object CACHE_LOCK = new Object();
 
     private static ScanListener activeListener;
@@ -149,47 +150,49 @@ public class ScanService extends Service {
 
     public static void saveScanCache(Context context, Scanner.Result res) {
         if (res == null || context == null) return;
-        synchronized (CACHE_LOCK) {
-            try {
-                JSONObject root = new JSONObject();
-                JSONArray all = new JSONArray();
-                Map<Scanner.Item, Integer> itemMap = new HashMap<>();
-                synchronized (res) {
-                    for (int i = 0; i < res.all.size(); i++) {
-                        Scanner.Item item = res.all.get(i);
-                        itemMap.put(item, i);
-                        JSONObject o = new JSONObject();
-                        o.put("uri", item.uri.toString());
-                        o.put("name", item.name);
-                        o.put("mime", item.mime);
-                        o.put("path", item.path);
-                        o.put("size", item.size);
-                        o.put("duration", item.duration);
-                        o.put("video", item.video);
-                        o.put("removed", item.removed);
-                        if (item.thumb != null) o.put("thumb", item.thumb.getAbsolutePath());
-                        all.put(o);
+        ioExecutor.execute(() -> {
+            synchronized (CACHE_LOCK) {
+                try {
+                    JSONObject root = new JSONObject();
+                    JSONArray all = new JSONArray();
+                    Map<Scanner.Item, Integer> itemMap = new HashMap<>();
+                    synchronized (res) {
+                        for (int i = 0; i < res.all.size(); i++) {
+                            Scanner.Item item = res.all.get(i);
+                            itemMap.put(item, i);
+                            JSONObject o = new JSONObject();
+                            o.put("uri", item.uri.toString());
+                            o.put("name", item.name);
+                            o.put("mime", item.mime);
+                            o.put("path", item.path);
+                            o.put("size", item.size);
+                            o.put("duration", item.duration);
+                            o.put("video", item.video);
+                            o.put("removed", item.removed);
+                            if (item.thumb != null) o.put("thumb", item.thumb.getAbsolutePath());
+                            all.put(o);
+                        }
+                        root.put("all", all);
+                        root.put("exact", groupsToJson(res.exact, itemMap));
+                        root.put("similar", groupsToJson(res.similar, itemMap));
+                        root.put("people", groupsToJson(res.people, itemMap));
+                        root.put("unreadable", res.unreadable);
+                        root.put("faceFailures", res.faceFailures);
+                        root.put("faceError", res.faceError);
                     }
-                    root.put("all", all);
-                    root.put("exact", groupsToJson(res.exact, itemMap));
-                    root.put("similar", groupsToJson(res.similar, itemMap));
-                    root.put("people", groupsToJson(res.people, itemMap));
-                    root.put("unreadable", res.unreadable);
-                    root.put("faceFailures", res.faceFailures);
-                    root.put("faceError", res.faceError);
-                }
-                File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
-                try (FileOutputStream out = new FileOutputStream(tmp)) {
-                    out.write(root.toString().getBytes("UTF-8"));
-                    out.getFD().sync();
-                }
-                File target = cacheFile(context);
-                if (!tmp.renameTo(target)) {
-                    if (target.exists()) target.delete();
-                    tmp.renameTo(target);
-                }
-            } catch (Exception e) {}
-        }
+                    File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
+                    try (FileOutputStream out = new FileOutputStream(tmp)) {
+                        out.write(root.toString().getBytes("UTF-8"));
+                        out.getFD().sync();
+                    }
+                    File target = cacheFile(context);
+                    if (!tmp.renameTo(target)) {
+                        if (target.exists()) target.delete();
+                        tmp.renameTo(target);
+                    }
+                } catch (Exception e) {}
+            }
+        });
     }
 
     private static JSONArray groupsToJson(List<Scanner.Group> groups, Map<Scanner.Item, Integer> itemMap) throws Exception {
