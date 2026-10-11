@@ -22,6 +22,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  private List<MoveRecord> pending;private boolean undoing;private String destination;private long lastProgress;
  private boolean isDeleting;private List<Scanner.Item> pendingDeletes;
  private final Set<String> sourceFilters=new TreeSet<>();
+ private long resultGeneration;
 
  private static final class MoveRecord {Uri uri;String oldPath,oldName,newPath,newName;Scanner.Item item;}
  public void onCreate(Bundle saved){
@@ -168,7 +169,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   final Set<String> snapshotFilters=new HashSet<>(sourceFilters);
   lastProgress=0;
 
-  ScanService.startScanJob(this, isBgScan, faces, setting, mediaType, snapshotFilters);
+  resultGeneration = ScanService.startScanJob(this, isBgScan, faces, setting, mediaType, snapshotFilters);
  }
 
  public void onRequestPermissionsResult(int code,String[] perms,int[] grants){
@@ -324,14 +325,12 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  private void confirmDelete(){
   if(selected.isEmpty()||fileBusy)return;
   ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
-  new AlertDialog.Builder(this).setTitle("確認刪除 "+snapshot.size()+" 個檔案").setMessage("警告：刪除後檔案將直接由系統移除，無法透過本程式復原！\n請確定要刪除這些勾選的媒體檔案。").setNegativeButton("取消",null).setPositiveButton("刪除",(d,w)->{
-   pendingDeletes=snapshot;
-   isDeleting=true;
-   fileBusy=true;
-   operationDeleted=operationDeleteFailed=0;
-   updateSelection();
-   requestDelete();
-  }).show();
+  pendingDeletes=snapshot;
+  isDeleting=true;
+  fileBusy=true;
+  operationDeleted=operationDeleteFailed=0;
+  updateSelection();
+  performInitialDirectDelete();
  }
  private void requestDelete(){
   if(pendingDeletes==null||pendingDeletes.isEmpty()){
@@ -344,7 +343,53 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
    ArrayList<Uri> uris=new ArrayList<>();
    for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
    startIntentSenderForResult(MediaStore.createDeleteRequest(getContentResolver(),uris).getIntentSender(),52,null,0,0,0);
-  }catch(Exception e){status.setText("無法取得刪除授權："+e.getMessage());pendingDeletes=null;fileBusy=false;saveScanCache(result);updateSelection();}
+  }catch(Exception e){
+   status.setText("刪除已完成（直接刪除 "+operationDeleted+" 個，需要授權或失敗 "+pendingDeletes.size()+" 個）");
+   pendingDeletes=null;
+   fileBusy=false;
+   saveScanCache(result);
+   updateSelection();
+   render();
+  }
+ }
+ private void performInitialDirectDelete(){
+  if(pendingDeletes==null||pendingDeletes.isEmpty()){
+   requestDelete();
+   return;
+  }
+  fileWorker.execute(()->{
+   List<Scanner.Item> directList=new ArrayList<>(pendingDeletes);
+   List<Scanner.Item> needPermissionList=new ArrayList<>();
+   int directDeleted=0;
+   for(Scanner.Item item:directList){
+    try{
+     int count=getContentResolver().delete(item.uri,null,null);
+     if(count>0){
+      item.removed=true;
+      ui(()->selected.remove(item));
+      directDeleted++;
+     }else{
+      needPermissionList.add(item);
+     }
+    }catch(Exception e){
+     needPermissionList.add(item);
+    }
+   }
+   final int dDeleted=directDeleted;
+   ui(()->{
+    operationDeleted+=dDeleted;
+    pendingDeletes=needPermissionList;
+    if(pendingDeletes.isEmpty()){
+     fileBusy=false;
+     saveScanCache(result);
+     updateSelection();
+     status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
+     render();
+    }else{
+     requestDelete();
+    }
+   });
+  });
  }
  private void finishMoveOperation(){
   pending=null;fileBusy=false;
@@ -444,11 +489,11 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  private synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
  private void undo(){if(fileBusy||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{pending=new ArrayList<>();for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");pending.add(r);}undoing=true;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
  private void help(){new AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setNegativeButton("關閉",null).setPositiveButton("清除縮圖快取",(d,w)->{selected.clear();result=null;clearThumbs();status.setText("縮圖快取已清除，請重新掃描。");render();}).show();}
- private void clearThumbs(){ScanService.clearCacheAsync(this);}
+ private void clearThumbs(){resultGeneration = ScanService.clearCacheAsync(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){
   if(res==null)return;
-  ScanService.saveScanCache(this, res);
+  ScanService.saveScanCache(this, res, resultGeneration);
  }
  private Scanner.Result loadScanCache(){
   if(!cacheFile().exists())return null;
