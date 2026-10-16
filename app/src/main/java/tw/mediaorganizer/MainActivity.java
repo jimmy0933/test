@@ -14,7 +14,7 @@ import java.io.*;
 import org.json.*;
 
 public class MainActivity extends Activity implements ScanService.ScanListener {
- private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3;
+ private final int BG=0xff121212,CARD=0xff1e1e1e,TEXT=0xffe0e0e0,ACCENT=0xff03dac6,BUTTON_BG=0xff333333;
  private LinearLayout root,list;private TextView status,selection,srcLabel;private CheckBox people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean dead,busy,fileBusy;private Scanner.Result result;
@@ -41,11 +41,28 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
 
  private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density);}
  private TextView text(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextColor(TEXT);t.setTextSize(size);t.setPadding(0,dp(5),0,dp(5));return t;}
- private Button button(String s,Runnable r){Button b=new Button(this);b.setText(s);b.setTextColor(TEXT);b.setAllCaps(false);b.setOnClickListener(v->r.run());return b;}
+ private Button button(String s,Runnable r){
+  Button b=new Button(this);
+  b.setText(s);
+  b.setTextColor(TEXT);
+  b.setAllCaps(false);
+
+  android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
+  gd.setColor(BUTTON_BG);
+  gd.setCornerRadius(dp(8));
+  b.setBackground(gd);
+
+  b.setOnClickListener(v->{
+   v.setAlpha(0.7f);
+   v.postDelayed(() -> v.setAlpha(1.0f), 100);
+   r.run();
+  });
+  return b;
+ }
  private void build(){
-  root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(BG);root.setPadding(dp(16),dp(12),dp(16),dp(8));
-  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(16),dp(8)+i.top,dp(16),dp(8)+i.bottom);return insets;});setContentView(root);
-  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
+  root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(BG);root.setPadding(dp(20),dp(16),dp(20),dp(12));
+  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(20),dp(12)+i.top,dp(20),dp(12)+i.bottom);return insets;});setContentView(root);
+  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0, 0, 0, dp(16));
   LinearLayout headerTitles=new LinearLayout(this);headerTitles.setOrientation(1);
   String verName="1.4";
   try{verName=getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){}
@@ -76,16 +93,34 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   LinearLayout actions=new LinearLayout(this);scan=button("開始掃描",this::requestScan);cancel=button("停止",()->{
    ScanService.cancelScan();
    status.setText("正在停止，已完成的掃描結果已保留…");
-  });cancel.setEnabled(false);actions.addView(scan,new LinearLayout.LayoutParams(0,dp(48),1));actions.addView(cancel,new LinearLayout.LayoutParams(dp(80),dp(48)));root.addView(actions);
+  });cancel.setEnabled(false);
+LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+scanParams.setMargins(0, 0, dp(8), 0);
+actions.addView(scan, scanParams);
+actions.addView(cancel, new LinearLayout.LayoutParams(dp(80), dp(48)));
+actions.setPadding(0, dp(16), 0, dp(16));
+root.addView(actions);
 
   status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);root.addView(status);
-  LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);tabs.addView(tab,new LinearLayout.LayoutParams(0,dp(44),1));}root.addView(tabs);
+  LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);
+LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(0, dp(44), 1);
+tabParams.setMargins(dp(2), dp(4), dp(2), dp(4));
+tabs.addView(tab, tabParams);
+}root.addView(tabs);
   ScrollView scroll=new ScrollView(this);list=new LinearLayout(this);list.setOrientation(1);scroll.addView(list);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
   selection=text("已選 0 個",12);root.addView(selection);
 
   LinearLayout footer=new LinearLayout(this);move=button("移到此資料夾",this::confirmMove);deleteBtn=button("刪除所選檔",this::confirmDelete);Button clear=button("取消勾選",()->{selected.clear();render();});
-  footer.addView(move,new LinearLayout.LayoutParams(0,dp(46),1));
-  footer.addView(deleteBtn,new LinearLayout.LayoutParams(0,dp(46),1));
+
+LinearLayout.LayoutParams moveParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+moveParams.setMargins(0, 0, dp(8), 0);
+footer.addView(move, moveParams);
+
+
+LinearLayout.LayoutParams delParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+delParams.setMargins(0, 0, dp(8), 0);
+footer.addView(deleteBtn, delParams);
+
   footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   root.addView(footer);
 
@@ -259,7 +294,14 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
   if(mode==3){groups=new ArrayList<>();for(Scanner.Item item:result.all)if(!item.removed){Scanner.Group g=new Scanner.Group(item.video?"影片":"照片");g.items.add(item);groups.add(g);}}
   int displayed=0;for(Scanner.Group group:groups){List<Scanner.Item> active=new ArrayList<>();for(Scanner.Item item:group.items)if(!item.removed)active.add(item);if(active.size()<(mode==3?1:2))continue;
-   if(displayed++>=limit)break;LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(10),dp(9),dp(10),dp(9));card.setBackgroundColor(CARD);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.setMargins(0,0,0,dp(10));list.addView(card,cp);
+   if(displayed++>=limit)break;LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(16),dp(12),dp(16),dp(12));
+LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);
+cp.setMargins(0,0,0,dp(16));
+android.graphics.drawable.GradientDrawable cardBg = new android.graphics.drawable.GradientDrawable();
+cardBg.setColor(CARD);
+cardBg.setCornerRadius(dp(12));
+card.setBackground(cardBg);
+list.addView(card,cp);
    TextView title=text(group.title+" · "+active.size()+" 個",14);title.setTypeface(null,1);card.addView(title);
    if(mode==2&&group.face!=null){ImageView face=new ImageView(this);face.setImageBitmap(BitmapFactory.decodeFile(group.face.getPath()));card.addView(face,new LinearLayout.LayoutParams(dp(72),dp(72)));card.addView(text("此分組只代表至少一張抽樣人臉接近；多人、側臉或模糊畫面可能誤判。",11));}
    LinearLayout tools=new LinearLayout(this);tools.addView(button("勾選整組",()->{if(mode==3){selected.addAll(active);}else if(!active.isEmpty()){selected.remove(active.get(0));if(active.size()>1)selected.addAll(active.subList(1,active.size()));}render();}),new LinearLayout.LayoutParams(0,dp(40),1));tools.addView(button("取消此組",()->{selected.removeAll(active);render();}),new LinearLayout.LayoutParams(0,dp(40),1));card.addView(tools);
