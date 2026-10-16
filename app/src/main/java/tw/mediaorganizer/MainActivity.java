@@ -9,7 +9,10 @@ import android.net.Uri;
 import android.provider.MediaStore;
 import android.view.*;
 import android.widget.*;
-import androidx.recyclerview.widget.*;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.DiffUtil;
+
 import java.util.*;
 import java.util.concurrent.*;
 import java.io.*;
@@ -18,7 +21,7 @@ import org.json.*;
 public class MainActivity extends Activity implements ScanService.ScanListener {
  private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3;
  private LinearLayout root;
- private androidx.recyclerview.widget.RecyclerView list;
+ private RecyclerView list;
  private ItemAdapter adapter;
  private final android.util.LruCache<String, android.graphics.Bitmap> thumbCache = new android.util.LruCache<String, android.graphics.Bitmap>((int)(Runtime.getRuntime().maxMemory()/1024)/8){protected int sizeOf(String k,android.graphics.Bitmap v){return v.getByteCount()/1024;}};private TextView status,selection,srcLabel;private CheckBox people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
@@ -384,11 +387,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   updateSelection();
   List<ListItem> newData = new ArrayList<>();
   if(result==null||result.all.isEmpty()){
-      newData.add(new ListItem(0, null, null, "先掃描，再選擇要整理的群組。
-完全重複：檔案內容一致
-相似：畫面接近，仍須人工查看
-人物：抽樣人臉特徵接近，不保證同一人
-註：掃描過程中即可勾選刪除或搬移！", false));
+      newData.add(new ListItem(0, null, null, "先掃描，再選擇要整理的群組。\n完全重複：檔案內容一致\n相似：畫面接近，仍須人工查看\n人物：抽樣人臉特徵接近，不保證同一人\n註：掃描過程中即可勾選刪除或搬移！", false));
       if (adapter != null) adapter.update(newData); return;
   }
   List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
@@ -443,7 +442,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   Button helpBtn=button("說明／清除快取",this::help);
   layout.addView(helpBtn,new LinearLayout.LayoutParams(-1,dp(42)));
 
-  Dialog d = new Dialog(this, android.R.style.Theme_DeviceDefault_Light_Dialog); d.setContentView(layout); d.getWindow().setGravity(Gravity.BOTTOM); d.getWindow().setLayout(-1, -2); d.show();
+  Dialog d = new Dialog(this, android.R.style.Theme_DeviceDefault_Dialog); d.setContentView(layout); d.getWindow().setGravity(Gravity.BOTTOM); d.getWindow().setLayout(-1, -2); d.show();
  }
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
  private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(scan!=null)scan.setEnabled(!busy&&!fileBusy);if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}
