@@ -1,5 +1,6 @@
 package tw.mediaorganizer;
 import android.app.*;
+import android.app.Dialog;
 import android.os.*;
 import android.content.*;
 import android.content.pm.PackageManager;
@@ -8,6 +9,7 @@ import android.net.Uri;
 import android.provider.MediaStore;
 import android.view.*;
 import android.widget.*;
+import androidx.recyclerview.widget.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.io.*;
@@ -15,7 +17,10 @@ import org.json.*;
 
 public class MainActivity extends Activity implements ScanService.ScanListener {
  private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3;
- private LinearLayout root,list;private TextView status,selection,srcLabel;private CheckBox people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
+ private LinearLayout root;
+ private androidx.recyclerview.widget.RecyclerView list;
+ private ItemAdapter adapter;
+ private final android.util.LruCache<String, android.graphics.Bitmap> thumbCache = new android.util.LruCache<String, android.graphics.Bitmap>((int)(Runtime.getRuntime().maxMemory()/1024)/8){protected int sizeOf(String k,android.graphics.Bitmap v){return v.getByteCount()/1024;}};private TextView status,selection,srcLabel;private CheckBox people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean dead,busy,fileBusy;private Scanner.Result result;
  private final LinkedHashSet<Scanner.Item> selected=new LinkedHashSet<>();private int mode=0,limit=20;
@@ -80,7 +85,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
 
   status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);root.addView(status);
   LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);tabs.addView(tab,new LinearLayout.LayoutParams(0,dp(44),1));}root.addView(tabs);
-  ScrollView scroll=new ScrollView(this);list=new LinearLayout(this);list.setOrientation(1);scroll.addView(list);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+  list = new RecyclerView(this); list.setLayoutManager(new LinearLayoutManager(this)); adapter = new ItemAdapter(); list.setAdapter(adapter); root.addView(list, new LinearLayout.LayoutParams(-1,0,1));
   selection=text("已選 0 個",12);root.addView(selection);
 
   LinearLayout footer=new LinearLayout(this);move=button("移到此資料夾",this::confirmMove);deleteBtn=button("刪除所選檔",this::confirmDelete);Button clear=button("取消勾選",()->{selected.clear();render();});
@@ -96,6 +101,23 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
    status.setText("已載入上次記錄 · "+cached.all.size()+" 個檔案 · "+cached.exact.size()+" 組重複 · "+cached.similar.size()+" 組相似");
   }
   render();
+
+  loadOpState();
+  if (fileBusy) {
+      if (isDeleting && pendingDeletes != null && !pendingDeletes.isEmpty()) {
+          requestDeleteBatch();
+      } else if (pending != null && !pending.isEmpty()) {
+          requestWrite();
+      } else {
+          fileBusy = false;
+      }
+  } else {
+      fileBusy = false;
+  }
+
+  fileWorker.execute(() -> {
+      try { promotePendingJournal(); } catch (Exception e) {}
+  });
  }
 
  private void selectSourceFolder(){
@@ -254,18 +276,138 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  }
 
  private void ui(Runnable r){if(!dead)runOnUiThread(()->{if(!dead)r.run();});}
- private void render(){
-  list.removeAllViews();updateSelection();if(result==null||result.all.isEmpty()){list.addView(text("先掃描，再選擇要整理的群組。\n完全重複：檔案內容一致\n相似：畫面接近，仍須人工查看\n人物：抽樣人臉特徵接近，不保證同一人\n註：掃描過程中即可勾選刪除或搬移！",15));return;}
+
+ private class ListItem {
+     int type; // 0 = title, 1 = group header, 2 = item
+     Scanner.Group group; Scanner.Item item;
+     String text; boolean checked;
+     ListItem(int t, Scanner.Group g, Scanner.Item i, String s, boolean c) { type = t; group = g; item = i; text = s; checked = c; }
+ }
+ private class ItemAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+     List<ListItem> data = new ArrayList<>();
+     void update(List<ListItem> newData) {
+         DiffUtil.calculateDiff(new DiffUtil.Callback() {
+             public int getOldListSize() { return data.size(); }
+             public int getNewListSize() { return newData.size(); }
+             public boolean areItemsTheSame(int o, int n) {
+                 ListItem oldItem = data.get(o), newItem = newData.get(n);
+                 if (oldItem.type != newItem.type) return false;
+                 if (oldItem.type == 2) return oldItem.item.uri.equals(newItem.item.uri);
+                 if (oldItem.type == 1) return oldItem.group == newItem.group;
+                 return oldItem.text.equals(newItem.text);
+             }
+             public boolean areContentsTheSame(int o, int n) {
+                 ListItem oldItem = data.get(o), newItem = newData.get(n);
+                 if (oldItem.type == 2) return oldItem.checked == newItem.checked;
+                 return true;
+             }
+         }).dispatchUpdatesTo(this);
+         data = newData;
+     }
+     public int getItemViewType(int pos) { return data.get(pos).type; }
+     public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+         if (viewType == 0) {
+             TextView t = text("", 15); t.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+             return new RecyclerView.ViewHolder(t) {};
+         } else if (viewType == 1) {
+             LinearLayout card = new LinearLayout(MainActivity.this); card.setOrientation(1); card.setPadding(dp(10),dp(9),dp(10),dp(9)); card.setBackgroundColor(CARD);
+             RecyclerView.LayoutParams cp = new RecyclerView.LayoutParams(-1,-2); cp.setMargins(0,0,0,dp(10)); card.setLayoutParams(cp);
+             TextView title = text("", 14); title.setTypeface(null,1); title.setId(101); card.addView(title);
+             ImageView face = new ImageView(MainActivity.this); face.setId(102); face.setVisibility(View.GONE); card.addView(face, new LinearLayout.LayoutParams(dp(72),dp(72)));
+             TextView faceLabel = text("此分組只代表至少一張抽樣人臉接近；多人、側臉或模糊畫面可能誤判。", 11); faceLabel.setId(103); faceLabel.setVisibility(View.GONE); card.addView(faceLabel);
+             LinearLayout tools = new LinearLayout(MainActivity.this);
+             Button checkAll = button("選取其餘項目", null); checkAll.setId(104); tools.addView(checkAll, new LinearLayout.LayoutParams(0, dp(40), 1));
+             Button uncheckAll = button("取消此組", null); uncheckAll.setId(105); tools.addView(uncheckAll, new LinearLayout.LayoutParams(0, dp(40), 1));
+             card.addView(tools);
+             return new RecyclerView.ViewHolder(card) {};
+         } else {
+             LinearLayout row = new LinearLayout(MainActivity.this); row.setGravity(Gravity.CENTER_VERTICAL); row.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+             CheckBox box = new CheckBox(MainActivity.this); box.setId(201); row.addView(box, new LinearLayout.LayoutParams(dp(40),dp(96)));
+             ImageView thumb = new ImageView(MainActivity.this); thumb.setId(202); thumb.setScaleType(ImageView.ScaleType.CENTER_CROP); row.addView(thumb, new LinearLayout.LayoutParams(dp(96),dp(96)));
+             TextView label = text("", 11); label.setId(203); label.setMaxLines(2); label.setEllipsize(android.text.TextUtils.TruncateAt.END);
+             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,-2,1); lp.setMargins(dp(8),0,0,0); row.addView(label, lp);
+             FrameLayout mask = new FrameLayout(MainActivity.this); mask.setId(204); mask.setBackgroundColor(0x3372d9c3); mask.setVisibility(View.GONE); row.addView(mask, new LinearLayout.LayoutParams(-1, -1));
+             return new RecyclerView.ViewHolder(row) {};
+         }
+     }
+     public void onBindViewHolder(RecyclerView.ViewHolder holder, int pos) {
+         ListItem item = data.get(pos);
+         if (item.type == 0) {
+             ((TextView)holder.itemView).setText(item.text);
+         } else if (item.type == 1) {
+             View v = holder.itemView;
+             ((TextView)v.findViewById(101)).setText(item.group.title);
+             ImageView face = v.findViewById(102); TextView faceLabel = v.findViewById(103);
+             if (mode == 2 && item.group.face != null) {
+                 face.setVisibility(View.VISIBLE); faceLabel.setVisibility(View.VISIBLE);
+                 face.setImageBitmap(BitmapFactory.decodeFile(item.group.face.getPath()));
+             } else { face.setVisibility(View.GONE); faceLabel.setVisibility(View.GONE); }
+             v.findViewById(104).setOnClickListener(btn -> {
+                 if(mode==3){selected.addAll(item.group.items);}
+                 else if(!item.group.items.isEmpty()){
+                     List<Scanner.Item> active = new ArrayList<>();
+                     for(Scanner.Item i : item.group.items) if(!i.removed) active.add(i);
+                     if(active.size()>1)selected.addAll(active.subList(1,active.size()));
+                 }
+                 render();
+             });
+             v.findViewById(105).setOnClickListener(btn -> { selected.removeAll(item.group.items); render(); });
+         } else {
+             View v = holder.itemView;
+             CheckBox box = v.findViewById(201); box.setOnCheckedChangeListener(null); box.setChecked(item.checked);
+             box.setOnCheckedChangeListener((cb, checked) -> { if(checked) selected.add(item.item); else selected.remove(item.item); updateSelection(); item.checked = checked; v.findViewById(204).setVisibility(checked?View.VISIBLE:View.GONE); });
+             ImageView thumb = v.findViewById(202); thumb.setImageBitmap(null);
+             if (item.item.thumb != null) {
+                 android.graphics.Bitmap c = thumbCache.get(item.item.thumb.getPath());
+                 if (c != null) thumb.setImageBitmap(c);
+                 else {
+                     fileWorker.execute(() -> {
+                         android.graphics.Bitmap b = smallThumb(item.item.thumb);
+                         if(b!=null) { thumbCache.put(item.item.thumb.getPath(), b); ui(() -> {if(data.get(holder.getAdapterPosition()).item == item.item) thumb.setImageBitmap(b);}); }
+                     });
+                 }
+             }
+             thumb.setOnClickListener(img -> preview(item.item));
+             TextView label = v.findViewById(203);
+             String textLabel = (item.item.video ? "▶ " : "") + item.item.name + "\n" + format(item.item.size) + (item.item.video ? " · " + item.item.duration / 1000 + " 秒" : "") + "\n" + item.item.path;
+
+
+             label.setText(textLabel);
+             label.setOnClickListener(lbl -> preview(item.item));
+             v.findViewById(204).setVisibility(item.checked?View.VISIBLE:View.GONE);
+         }
+     }
+     public int getItemCount() { return data.size(); }
+ }
+
+ private void render() {
+  updateSelection();
+  List<ListItem> newData = new ArrayList<>();
+  if(result==null||result.all.isEmpty()){
+      newData.add(new ListItem(0, null, null, "先掃描，再選擇要整理的群組。
+完全重複：檔案內容一致
+相似：畫面接近，仍須人工查看
+人物：抽樣人臉特徵接近，不保證同一人
+註：掃描過程中即可勾選刪除或搬移！", false));
+      if (adapter != null) adapter.update(newData); return;
+  }
   List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
   if(mode==3){groups=new ArrayList<>();for(Scanner.Item item:result.all)if(!item.removed){Scanner.Group g=new Scanner.Group(item.video?"影片":"照片");g.items.add(item);groups.add(g);}}
-  int displayed=0;for(Scanner.Group group:groups){List<Scanner.Item> active=new ArrayList<>();for(Scanner.Item item:group.items)if(!item.removed)active.add(item);if(active.size()<(mode==3?1:2))continue;
-   if(displayed++>=limit)break;LinearLayout card=new LinearLayout(this);card.setOrientation(1);card.setPadding(dp(10),dp(9),dp(10),dp(9));card.setBackgroundColor(CARD);LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.setMargins(0,0,0,dp(10));list.addView(card,cp);
-   TextView title=text(group.title+" · "+active.size()+" 個",14);title.setTypeface(null,1);card.addView(title);
-   if(mode==2&&group.face!=null){ImageView face=new ImageView(this);face.setImageBitmap(BitmapFactory.decodeFile(group.face.getPath()));card.addView(face,new LinearLayout.LayoutParams(dp(72),dp(72)));card.addView(text("此分組只代表至少一張抽樣人臉接近；多人、側臉或模糊畫面可能誤判。",11));}
-   LinearLayout tools=new LinearLayout(this);tools.addView(button("勾選整組",()->{if(mode==3){selected.addAll(active);}else if(!active.isEmpty()){selected.remove(active.get(0));if(active.size()>1)selected.addAll(active.subList(1,active.size()));}render();}),new LinearLayout.LayoutParams(0,dp(40),1));tools.addView(button("取消此組",()->{selected.removeAll(active);render();}),new LinearLayout.LayoutParams(0,dp(40),1));card.addView(tools);
-   int count=0;for(Scanner.Item item:active){if(count++>=12){card.addView(text("大型群組：先顯示 12 個，可勾選整組。全部頁面可逐檔查看。",11));break;}LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);CheckBox box=new CheckBox(this);box.setChecked(selected.contains(item));box.setOnCheckedChangeListener((v,checked)->{if(checked)selected.add(item);else selected.remove(item);updateSelection();});row.addView(box,new LinearLayout.LayoutParams(dp(40),dp(96)));ImageView thumb=new ImageView(this);thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);if(item.thumb!=null)thumb.setImageBitmap(smallThumb(item.thumb));row.addView(thumb,new LinearLayout.LayoutParams(dp(96),dp(96)));thumb.setOnClickListener(v->preview(item));TextView label=text((item.video?"▶ ":"")+item.name+"\n"+format(item.size)+(item.video?" · "+item.duration/1000+" 秒":"")+"\n"+item.path,11);label.setOnClickListener(v->preview(item));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.setMargins(dp(8),0,0,0);row.addView(label,lp);card.addView(row);}
+  int displayed=0;
+  for(Scanner.Group group:groups){
+      List<Scanner.Item> active=new ArrayList<>();for(Scanner.Item item:group.items)if(!item.removed)active.add(item);
+      if(active.size()<(mode==3?1:2))continue;
+      if(displayed++>=limit)break;
+      newData.add(new ListItem(1, group, null, null, false));
+      int count=0;
+      for(Scanner.Item item:active){
+          if(count++>=12){newData.add(new ListItem(0, null, null, "大型群組：先顯示 12 個，可勾選整組。全部頁面可逐檔查看。", false));break;}
+          newData.add(new ListItem(2, group, item, null, selected.contains(item)));
+      }
   }
-  if(displayed>limit)list.addView(button("顯示更多群組",()->{limit+=20;render();}));if(displayed==0)list.addView(text(mode==2?"沒有跨檔案的人物群組。需有清楚正面人臉；人物分析選項須在掃描前啟用。":"此分類尚無符合項目。",15));
+  if(displayed>limit) newData.add(new ListItem(0, null, null, "顯示更多群組...", false));
+  if(displayed==0) newData.add(new ListItem(0, null, null, mode==2?"沒有跨檔案的人物群組。需有清楚正面人臉；人物分析選項須在掃描前啟用。":"此分類尚無符合項目。", false));
+  if (adapter != null) adapter.update(newData);
  }
  private Bitmap smallThumb(File file){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;return BitmapFactory.decodeFile(file.getPath(),options);}
  private void showSettingsDialog(){
@@ -301,7 +443,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   Button helpBtn=button("說明／清除快取",this::help);
   layout.addView(helpBtn,new LinearLayout.LayoutParams(-1,dp(42)));
 
-  new AlertDialog.Builder(this).setTitle("設定與工具").setView(layout).setPositiveButton("確定",null).show();
+  Dialog d = new Dialog(this, android.R.style.Theme_DeviceDefault_Light_Dialog); d.setContentView(layout); d.getWindow().setGravity(Gravity.BOTTOM); d.getWindow().setLayout(-1, -2); d.show();
  }
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
  private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(scan!=null)scan.setEnabled(!busy&&!fileBusy);if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}
@@ -386,15 +528,117 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
    });
   });
  }
+
+    private void saveOpState() {
+        try {
+            JSONObject root = new JSONObject();
+            root.put("isDeleting", isDeleting);
+            root.put("undoing", undoing);
+            root.put("operationHasSuccess", operationHasSuccess);
+            root.put("operationMoved", operationMoved);
+            root.put("operationFailed", operationFailed);
+            root.put("operationDeleted", operationDeleted);
+            root.put("operationDeleteFailed", operationDeleteFailed);
+
+            if (pendingDeletes != null) {
+                JSONArray deletes = new JSONArray();
+                for (Scanner.Item item : pendingDeletes) deletes.put(item.uri.toString());
+                root.put("pendingDeletes", deletes);
+            }
+
+            if (pending != null) {
+                JSONArray moves = new JSONArray();
+                for (MoveRecord r : pending) {
+                    JSONObject mo = new JSONObject();
+                    mo.put("uri", r.uri.toString());
+                    if (r.oldPath != null) mo.put("oldPath", r.oldPath);
+                    if (r.oldName != null) mo.put("oldName", r.oldName);
+                    if (r.newPath != null) mo.put("newPath", r.newPath);
+                    if (r.newName != null) mo.put("newName", r.newName);
+                    moves.put(mo);
+                }
+                root.put("pending", moves);
+            }
+
+            File f = new File(getFilesDir(), "op-state.json");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(f)) {
+                out.write(root.toString().getBytes("UTF-8"));
+            }
+        } catch (Exception e) {}
+    }
+
+    private void loadOpState() {
+        File f = new File(getFilesDir(), "op-state.json");
+        if (!f.exists()) return;
+        try (InputStream in = new FileInputStream(f)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] b = new byte[4096]; int n;
+            while ((n = in.read(b)) > 0) out.write(b, 0, n);
+            JSONObject root = new JSONObject(out.toString("UTF-8"));
+
+            isDeleting = root.optBoolean("isDeleting", false);
+            undoing = root.optBoolean("undoing", false);
+            operationHasSuccess = root.optBoolean("operationHasSuccess", false);
+            operationMoved = root.optInt("operationMoved", 0);
+            operationFailed = root.optInt("operationFailed", 0);
+            operationDeleted = root.optInt("operationDeleted", 0);
+            operationDeleteFailed = root.optInt("operationDeleteFailed", 0);
+
+            if (root.has("pendingDeletes")) {
+                pendingDeletes = new ArrayList<>();
+                JSONArray deletes = root.getJSONArray("pendingDeletes");
+                for (int i = 0; i < deletes.length(); i++) {
+                    Scanner.Item item = new Scanner.Item();
+                    item.uri = Uri.parse(deletes.getString(i));
+                    if (result != null) {
+                        for (Scanner.Item existing : result.all) {
+                            if (existing.uri.equals(item.uri)) { item = existing; break; }
+                        }
+                    }
+                    pendingDeletes.add(item);
+                }
+                fileBusy = true;
+            }
+
+            if (root.has("pending")) {
+                pending = new ArrayList<>();
+                JSONArray moves = root.getJSONArray("pending");
+                for (int i = 0; i < moves.length(); i++) {
+                    JSONObject mo = moves.getJSONObject(i);
+                    MoveRecord r = new MoveRecord();
+                    r.uri = Uri.parse(mo.getString("uri"));
+                    r.oldPath = mo.optString("oldPath", null);
+                    r.oldName = mo.optString("oldName", null);
+                    r.newPath = mo.optString("newPath", null);
+                    r.newName = mo.optString("newName", null);
+                    if (result != null) {
+                        for (Scanner.Item existing : result.all) {
+                            if (existing.uri.equals(r.uri)) { r.item = existing; break; }
+                        }
+                    }
+                    pending.add(r);
+                }
+                fileBusy = true;
+            }
+        } catch (Exception e) {}
+    }
+
+    private void clearOpState() {
+        File f = new File(getFilesDir(), "op-state.json");
+        if (f.exists()) f.delete();
+    }
+
  private void requestDeleteBatch(){
   if(pendingDeletes==null||pendingDeletes.isEmpty()){
    fileBusy=false;
+   clearOpState();
    saveScanCache(result);
    updateSelection();
    status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
    render();
    return;
   }
+  saveOpState();
   try{
    ArrayList<Uri> uris=new ArrayList<>();
    for(int i=0;i<Math.min(100,pendingDeletes.size());i++)uris.add(pendingDeletes.get(i).uri);
@@ -421,10 +665,12 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  }
  private void requestWrite(){if(pending==null||pending.isEmpty()){
   status.setText((undoing?"復原":"移動")+"完成 · 成功 "+operationMoved+" · 失敗 "+operationFailed+(undoing?"；請重新掃描更新分組。":"；可繼續勾選移到同一資料夾。"));
+  clearOpState();
   finishMoveOperation();
   operationHasSuccess=false;operationMoved=operationFailed=0;
   return;
  }
+  saveOpState();
   try{ArrayList<Uri> uris=new ArrayList<>();for(int i=0;i<Math.min(100,pending.size());i++)uris.add(pending.get(i).uri);startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),uris).getIntentSender(),51,null,0,0,0);}catch(Exception e){status.setText("無法取得移動授權："+e.getMessage());finishMoveOperation();}}
  public void onActivityResult(int request,int response,Intent data){super.onActivityResult(request,response,data);
   if(request==51){if(response==RESULT_OK)applyBatch();else{
@@ -462,13 +708,16 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   fileWorker.execute(()->{int moved=0,failed=0;List<MoveRecord> successfulRecords=new ArrayList<>();for(MoveRecord r:batch){if(dead)break;try{
     if(r.newPath==null||r.newPath.isEmpty()||(!undoing&&(r.oldPath==null||r.oldPath.isEmpty())))throw new IOException("原資料夾紀錄不完整");String finalName=collision(r.uri,r.newPath,r.newName)?uniqueName(r.newName):r.newName;
     ContentValues values=new ContentValues();values.put(MediaStore.MediaColumns.RELATIVE_PATH,r.newPath);values.put(MediaStore.MediaColumns.DISPLAY_NAME,finalName);
-    if(!undoing){if(!operationHasSuccess){writeJournal(new JSONArray());operationHasSuccess=true;}appendJournal(r);}
     int updated=getContentResolver().update(r.uri,values,null,null);if(updated!=1)throw new IOException("檔案更新失敗");moved++;
+    if(!undoing){if(!operationHasSuccess){operationHasSuccess=true;}appendJournalPending(r);}
     if(undoing){removeJournal(r.uri);}
     if(r.item!=null){r.item.removed=true;}
     successfulRecords.add(r);
    }catch(Exception e){failed++;}}
    final int m=moved,f=failed;ui(()->{operationMoved+=m;operationFailed+=f;
+    if(!undoing && !successfulRecords.isEmpty()) {
+     try { promotePendingJournal(); } catch(Exception e){}
+    }
     if(pending!=null)pending.removeAll(batch);
     if(!undoing)for(MoveRecord r:successfulRecords)if(r.item!=null)selected.remove(r.item);
     if(pending!=null&&!pending.isEmpty()){status.setText("已處理 "+(operationMoved+operationFailed)+" 個（成功 "+operationMoved+"），繼續下一批…");requestWrite();}
@@ -482,28 +731,29 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  private boolean collision(Uri self,String path,String name){try(android.database.Cursor c=getContentResolver().query(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),new String[]{"_id"},"relative_path = ? AND _display_name = ?",new String[]{path,name},null)){if(c!=null)while(c.moveToNext())if(c.getLong(0)!=ContentUris.parseId(self))return true;}return false;}
  private String uniqueName(String name){int i=name.lastIndexOf('.');String id="_"+UUID.randomUUID().toString().substring(0,8);return i>0?name.substring(0,i)+id+name.substring(i):name+id;}
  private File journal(){return new File(getFilesDir(),"move-journal.json");}
+ private File journalPending(){return new File(getFilesDir(),"move-journal-pending.json");}
  private File journalBackup(){return new File(getFilesDir(),"move-journal-backup.json");}
  private synchronized void backupJournal(){
-  File j=journal(), b=journalBackup();
-  if(j.exists()){
-   try(InputStream in=new FileInputStream(j); FileOutputStream out=new FileOutputStream(b)){
-    byte[] buf=new byte[4096]; int n;
-    while((n=in.read(buf))>0) out.write(buf,0,n);
-    out.getFD().sync();
-   }catch(Exception e){}
-  }
+  File jp=journalPending();
+  if(jp.exists())jp.delete();
  }
  private synchronized void restoreJournalBackup(){
-  File j=journal(), b=journalBackup();
-  if(b.exists()){
-   if(j.exists())j.delete();
-   b.renameTo(j);
+ }
+ private synchronized void clearJournalBackup(){
+  File jp=journalPending();
+  if(jp.exists())jp.delete();
+ }
+ private synchronized JSONArray readJournal()throws Exception{if(!journal().exists())return new JSONArray();try(InputStream in=new FileInputStream(journal())){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);return new JSONArray(out.toString("UTF-8"));}}
+ private synchronized JSONArray readJournalPending()throws Exception{if(!journalPending().exists())return new JSONArray();try(InputStream in=new FileInputStream(journalPending())){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);return new JSONArray(out.toString("UTF-8"));}}
+ private synchronized void writeJournal(JSONArray a)throws Exception{File tmp=new File(getFilesDir(),"move-journal.tmp");try(FileOutputStream out=new FileOutputStream(tmp)){out.write(a.toString().getBytes("UTF-8"));out.getFD().sync();}if(!tmp.renameTo(journal()))throw new IOException("復原紀錄儲存失敗");}
+ private synchronized void writeJournalPending(JSONArray a)throws Exception{File tmp=new File(getFilesDir(),"move-journal-pending.tmp");try(FileOutputStream out=new FileOutputStream(tmp)){out.write(a.toString().getBytes("UTF-8"));out.getFD().sync();}if(!tmp.renameTo(journalPending()))throw new IOException("暫存復原紀錄儲存失敗");}
+ private synchronized void appendJournalPending(MoveRecord r)throws Exception{JSONArray a=readJournalPending();JSONObject o=new JSONObject();o.put("uri",r.uri.toString());o.put("path",r.oldPath);o.put("name",r.oldName);a.put(o);writeJournalPending(a);}
+ private synchronized void promotePendingJournal()throws Exception{
+  JSONArray pending = readJournalPending();
+  if (pending.length() > 0) {
+   writeJournal(pending);
   }
  }
- private synchronized void clearJournalBackup(){journalBackup().delete();}
- private synchronized JSONArray readJournal()throws Exception{if(!journal().exists())return new JSONArray();try(InputStream in=new FileInputStream(journal())){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);return new JSONArray(out.toString("UTF-8"));}}
- private synchronized void writeJournal(JSONArray a)throws Exception{File tmp=new File(getFilesDir(),"move-journal.tmp");try(FileOutputStream out=new FileOutputStream(tmp)){out.write(a.toString().getBytes("UTF-8"));out.getFD().sync();}if(!tmp.renameTo(journal()))throw new IOException("復原紀錄儲存失敗");}
- private synchronized void appendJournal(MoveRecord r)throws Exception{JSONArray a=readJournal();JSONObject o=new JSONObject();o.put("uri",r.uri.toString());o.put("path",r.oldPath);o.put("name",r.oldName);a.put(o);writeJournal(a);}
  private synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
  private void undo(){if(fileBusy||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{pending=new ArrayList<>();for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");pending.add(r);}undoing=true;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
  private void help(){new AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setNegativeButton("關閉",null).setPositiveButton("清除縮圖快取",(d,w)->{selected.clear();result=null;clearThumbs();status.setText("縮圖快取已清除，請重新掃描。");render();}).show();}
@@ -517,7 +767,9 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   if(!cacheFile().exists())return null;
   try(InputStream in=new FileInputStream(cacheFile())){
    ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);
-   JSONObject root=new JSONObject(out.toString("UTF-8"));Scanner.Result res=new Scanner.Result();JSONArray all=root.getJSONArray("all");
+   JSONObject root=new JSONObject(out.toString("UTF-8"));
+   if(root.has("generation") && root.getLong("generation") != ScanService.getGeneration()){return null;}
+   Scanner.Result res=new Scanner.Result();JSONArray all=root.getJSONArray("all");
    for(int i=0;i<all.length();i++){
     JSONObject o=all.getJSONObject(i);Scanner.Item item=new Scanner.Item();item.uri=Uri.parse(o.getString("uri"));item.name=o.optString("name","");item.mime=o.optString("mime",null);item.path=o.optString("path","");item.size=o.optLong("size",0);item.duration=o.optLong("duration",0);item.video=o.optBoolean("video",false);item.removed=o.optBoolean("removed",false);
     if(o.has("thumb"))item.thumb=new File(o.getString("thumb"));res.all.add(item);
