@@ -49,11 +49,28 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
 
  private int dp(int n){return (int)(n*getResources().getDisplayMetrics().density);}
  private TextView text(String s,int size){TextView t=new TextView(this);t.setText(s);t.setTextColor(TEXT);t.setTextSize(size);t.setPadding(0,dp(5),0,dp(5));return t;}
- private Button button(String s,Runnable r){Button b=new Button(this);b.setText(s);b.setTextColor(TEXT);b.setAllCaps(false);b.setOnClickListener(v->r.run());return b;}
+ private Button button(String s,Runnable r){
+  Button b=new Button(this);
+  b.setText(s);
+  b.setTextColor(TEXT);
+  b.setAllCaps(false);
+
+  android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
+  gd.setColor(BUTTON_BG);
+  gd.setCornerRadius(dp(8));
+  b.setBackground(gd);
+
+  b.setOnClickListener(v->{
+   v.setAlpha(0.7f);
+   v.postDelayed(() -> v.setAlpha(1.0f), 100);
+   r.run();
+  });
+  return b;
+ }
  private void build(){
-  root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(BG);root.setPadding(dp(16),dp(12),dp(16),dp(8));
-  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(16),dp(8)+i.top,dp(16),dp(8)+i.bottom);return insets;});setContentView(root);
-  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
+  root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(BG);root.setPadding(dp(20),dp(16),dp(20),dp(12));
+  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(20),dp(12)+i.top,dp(20),dp(12)+i.bottom);return insets;});setContentView(root);
+  LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0, 0, 0, dp(16));
   LinearLayout headerTitles=new LinearLayout(this);headerTitles.setOrientation(1);
   String verName="1.4";
   try{verName=getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){}
@@ -84,7 +101,13 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   LinearLayout actions=new LinearLayout(this);scan=button("開始掃描",this::requestScan);cancel=button("停止",()->{
    ScanService.cancelScan();
    status.setText("正在停止，已完成的掃描結果已保留…");
-  });cancel.setEnabled(false);actions.addView(scan,new LinearLayout.LayoutParams(0,dp(48),1));actions.addView(cancel,new LinearLayout.LayoutParams(dp(80),dp(48)));root.addView(actions);
+  });cancel.setEnabled(false);
+LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+scanParams.setMargins(0, 0, dp(8), 0);
+actions.addView(scan, scanParams);
+actions.addView(cancel, new LinearLayout.LayoutParams(dp(80), dp(48)));
+actions.setPadding(0, dp(16), 0, dp(16));
+root.addView(actions);
 
   status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);root.addView(status);
   LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);tabs.addView(tab,new LinearLayout.LayoutParams(0,dp(44),1));}root.addView(tabs);
@@ -92,8 +115,16 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   selection=text("已選 0 個",12);root.addView(selection);
 
   LinearLayout footer=new LinearLayout(this);move=button("移到此資料夾",this::confirmMove);deleteBtn=button("刪除所選檔",this::confirmDelete);Button clear=button("取消勾選",()->{selected.clear();render();});
-  footer.addView(move,new LinearLayout.LayoutParams(0,dp(46),1));
-  footer.addView(deleteBtn,new LinearLayout.LayoutParams(0,dp(46),1));
+
+LinearLayout.LayoutParams moveParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+moveParams.setMargins(0, 0, dp(8), 0);
+footer.addView(move, moveParams);
+
+
+LinearLayout.LayoutParams delParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+delParams.setMargins(0, 0, dp(8), 0);
+footer.addView(deleteBtn, delParams);
+
   footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   root.addView(footer);
 
