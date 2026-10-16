@@ -9,19 +9,16 @@ import android.net.Uri;
 import android.provider.MediaStore;
 import android.view.*;
 import android.widget.*;
-import androidx.recyclerview.widget.RecyclerView;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.DiffUtil;
-
+import androidx.recyclerview.widget.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.io.*;
 import org.json.*;
 
 public class MainActivity extends Activity implements ScanService.ScanListener {
- private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3;
+ private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3,BUTTON_BG=0xff333333;
  private LinearLayout root;
- private RecyclerView list;
+ private androidx.recyclerview.widget.RecyclerView list;
  private ItemAdapter adapter;
  private final android.util.LruCache<String, android.graphics.Bitmap> thumbCache = new android.util.LruCache<String, android.graphics.Bitmap>((int)(Runtime.getRuntime().maxMemory()/1024)/8){protected int sizeOf(String k,android.graphics.Bitmap v){return v.getByteCount()/1024;}};private TextView status,selection,srcLabel;private CheckBox people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
@@ -69,7 +66,7 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
  }
  private void build(){
   root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(BG);root.setPadding(dp(20),dp(16),dp(20),dp(12));
-  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(20),dp(12)+i.top,dp(20),dp(12)+i.bottom);return insets;});setContentView(root);
+  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(16),dp(8)+i.top,dp(16),dp(8)+i.bottom);return insets;});setContentView(root);
   LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0, 0, 0, dp(16));
   LinearLayout headerTitles=new LinearLayout(this);headerTitles.setOrientation(1);
   String verName="1.4";
@@ -92,9 +89,9 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
 
   strictness=new Spinner(this);
   String[] labels={"嚴格（建議）","一般","寬鬆（較多誤判）"};
-  ArrayAdapter<String> adapter=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,labels){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};
-  adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-  strictness.setAdapter(adapter);
+  ArrayAdapter<String> mediaAdapter2=new ArrayAdapter<String>(this,android.R.layout.simple_spinner_item,labels){public View getView(int p,View v,android.view.ViewGroup parent){TextView t=(TextView)super.getView(p,v,parent);t.setTextColor(TEXT);return t;}};
+  mediaAdapter2.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+  strictness.setAdapter(mediaAdapter2);
 
   srcLabel=text(" 來源：全部媒體",12);
 
@@ -103,29 +100,27 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
    status.setText("正在停止，已完成的掃描結果已保留…");
   });cancel.setEnabled(false);
 LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(0, dp(48), 1);
-scanParams.setMargins(0, 0, dp(8), 0);
+scanParams.setMargins(0, 0, dp(12), 0);
 actions.addView(scan, scanParams);
 actions.addView(cancel, new LinearLayout.LayoutParams(dp(80), dp(48)));
-actions.setPadding(0, dp(16), 0, dp(16));
 root.addView(actions);
 
   status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);root.addView(status);
-  LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);tabs.addView(tab,new LinearLayout.LayoutParams(0,dp(44),1));}root.addView(tabs);
+  LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);
+LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(0, dp(44), 1);
+tabParams.setMargins(dp(2), dp(16), dp(2), dp(8));
+tabs.addView(tab, tabParams);}root.addView(tabs);
   list = new RecyclerView(this); list.setLayoutManager(new LinearLayoutManager(this)); adapter = new ItemAdapter(); list.setAdapter(adapter); root.addView(list, new LinearLayout.LayoutParams(-1,0,1));
   selection=text("已選 0 個",12);root.addView(selection);
 
   LinearLayout footer=new LinearLayout(this);move=button("移到此資料夾",this::confirmMove);deleteBtn=button("刪除所選檔",this::confirmDelete);Button clear=button("取消勾選",()->{selected.clear();render();});
-
-LinearLayout.LayoutParams moveParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+  LinearLayout.LayoutParams moveParams = new LinearLayout.LayoutParams(0, dp(46), 1);
 moveParams.setMargins(0, 0, dp(8), 0);
 footer.addView(move, moveParams);
-
-
 LinearLayout.LayoutParams delParams = new LinearLayout.LayoutParams(0, dp(46), 1);
 delParams.setMargins(0, 0, dp(8), 0);
 footer.addView(deleteBtn, delParams);
-
-  footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
+footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   root.addView(footer);
 
   resultGeneration=ScanService.getGeneration();
@@ -346,6 +341,11 @@ footer.addView(deleteBtn, delParams);
          } else if (viewType == 1) {
              LinearLayout card = new LinearLayout(MainActivity.this); card.setOrientation(1); card.setPadding(dp(10),dp(9),dp(10),dp(9)); card.setBackgroundColor(CARD);
              RecyclerView.LayoutParams cp = new RecyclerView.LayoutParams(-1,-2); cp.setMargins(0,0,0,dp(10)); card.setLayoutParams(cp);
+                android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
+                gd.setColor(CARD);
+                gd.setCornerRadius(dp(12));
+                card.setBackground(gd);
+                card.setPadding(dp(12), dp(12), dp(12), dp(12));
              TextView title = text("", 14); title.setTypeface(null,1); title.setId(101); card.addView(title);
              ImageView face = new ImageView(MainActivity.this); face.setId(102); face.setVisibility(View.GONE); card.addView(face, new LinearLayout.LayoutParams(dp(72),dp(72)));
              TextView faceLabel = text("此分組只代表至少一張抽樣人臉接近；多人、側臉或模糊畫面可能誤判。", 11); faceLabel.setId(103); faceLabel.setVisibility(View.GONE); card.addView(faceLabel);
@@ -356,6 +356,10 @@ footer.addView(deleteBtn, delParams);
              return new RecyclerView.ViewHolder(card) {};
          } else {
              LinearLayout row = new LinearLayout(MainActivity.this); row.setGravity(Gravity.CENTER_VERTICAL); row.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+                android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
+                gd.setColor(0xff333333);
+                gd.setCornerRadius(dp(8));
+                row.setBackground(gd);
              CheckBox box = new CheckBox(MainActivity.this); box.setId(201); row.addView(box, new LinearLayout.LayoutParams(dp(40),dp(96)));
              ImageView thumb = new ImageView(MainActivity.this); thumb.setId(202); thumb.setScaleType(ImageView.ScaleType.CENTER_CROP); row.addView(thumb, new LinearLayout.LayoutParams(dp(96),dp(96)));
              TextView label = text("", 11); label.setId(203); label.setMaxLines(2); label.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -418,7 +422,11 @@ footer.addView(deleteBtn, delParams);
   updateSelection();
   List<ListItem> newData = new ArrayList<>();
   if(result==null||result.all.isEmpty()){
-      newData.add(new ListItem(0, null, null, "先掃描，再選擇要整理的群組。\n完全重複：檔案內容一致\n相似：畫面接近，仍須人工查看\n人物：抽樣人臉特徵接近，不保證同一人\n註：掃描過程中即可勾選刪除或搬移！", false));
+      newData.add(new ListItem(0, null, null, "先掃描，再選擇要整理的群組。\n" +
+"完全重複：檔案內容一致\n" +
+"相似：畫面接近，仍須人工查看\n" +
+"人物：抽樣人臉特徵接近，不保證同一人\n" +
+"註：掃描過程中即可勾選刪除或搬移！", false));
       if (adapter != null) adapter.update(newData); return;
   }
   List<Scanner.Group> groups=mode==0?result.exact:mode==1?result.similar:result.people;
@@ -473,7 +481,7 @@ footer.addView(deleteBtn, delParams);
   Button helpBtn=button("說明／清除快取",this::help);
   layout.addView(helpBtn,new LinearLayout.LayoutParams(-1,dp(42)));
 
-  Dialog d = new Dialog(this, android.R.style.Theme_DeviceDefault_Dialog); d.setContentView(layout); d.getWindow().setGravity(Gravity.BOTTOM); d.getWindow().setLayout(-1, -2); d.show();
+  Dialog d = new Dialog(this, android.R.style.Theme_DeviceDefault_Light_Dialog); d.setContentView(layout); d.getWindow().setGravity(Gravity.BOTTOM); d.getWindow().setLayout(-1, -2); d.show();
  }
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
  private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(scan!=null)scan.setEnabled(!busy&&!fileBusy);if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}

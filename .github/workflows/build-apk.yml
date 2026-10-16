@@ -37,7 +37,7 @@ jobs:
       - name: Run similarity tests
         run: |
           mkdir -p dist
-          bash tests/run-tests.sh | tee dist/test-results.txt
+          set -o pipefail && bash tests/run-tests.sh | tee dist/test-results.txt
 
       - name: Build signed Release APK
         run: |
