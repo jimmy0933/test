@@ -3,3 +3,5 @@ app/build/
 .test-classes/
 dist/
 /tmp/
+gradle-8.9
+gradle-8.9-bin.zip
