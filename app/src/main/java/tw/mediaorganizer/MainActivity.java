@@ -15,12 +15,17 @@ import java.util.concurrent.*;
 import java.io.*;
 import org.json.*;
 
-public class MainActivity extends Activity implements ScanService.ScanListener {
- private final int BG=0xff101723,CARD=0xff1d293b,TEXT=0xffedf4ff,ACCENT=0xff72d9c3,BUTTON_BG=0xff333333;
- private LinearLayout root;
+import androidx.appcompat.app.AppCompatActivity;
+public class MainActivity extends AppCompatActivity implements ScanService.ScanListener {
+ private final int BG=0xff0F1720,CARD=0xff182330,TEXT=0xffF1F5F9,ACCENT=0xff53D6BD,BUTTON_BG=0xff333333,TEXT_SEC=0xffA8B6C7;
+ private FrameLayout root;
+ private LinearLayout mainContent;
  private androidx.recyclerview.widget.RecyclerView list;
  private ItemAdapter adapter;
- private final android.util.LruCache<String, android.graphics.Bitmap> thumbCache = new android.util.LruCache<String, android.graphics.Bitmap>((int)(Runtime.getRuntime().maxMemory()/1024)/8){protected int sizeOf(String k,android.graphics.Bitmap v){return v.getByteCount()/1024;}};private TextView status,selection,srcLabel;private CheckBox people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
+ private final android.util.LruCache<String, android.graphics.Bitmap> thumbCache = new android.util.LruCache<String, android.graphics.Bitmap>((int)(Runtime.getRuntime().maxMemory()/1024)/8){protected int sizeOf(String k,android.graphics.Bitmap v){return v.getByteCount()/1024;}};private TextView status,selection,srcLabel;
+ private TextView[] tabButtons;
+ private View footerContainer;
+ private android.widget.Switch people,bgScan;private Spinner strictness,mediaTypeSpinner;private Button scan,move,deleteBtn,cancel;
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean dead,busy,fileBusy;private Scanner.Result result;
  private final LinkedHashSet<Scanner.Item> selected=new LinkedHashSet<>();private int mode=0,limit=20;
@@ -65,20 +70,42 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
   return b;
  }
  private void build(){
-  root=new LinearLayout(this);root.setOrientation(1);root.setBackgroundColor(BG);root.setPadding(dp(20),dp(16),dp(20),dp(12));
-  root.setOnApplyWindowInsetsListener((v,insets)->{android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());root.setPadding(dp(16),dp(8)+i.top,dp(16),dp(8)+i.bottom);return insets;});setContentView(root);
+  root = new FrameLayout(this);
+  root.setBackgroundColor(BG);
+
+  LinearLayout mainContent = new LinearLayout(this);
+  mainContent.setOrientation(1);
+  mainContent.setPadding(dp(20),dp(16),dp(20),dp(12));
+
+  root.setOnApplyWindowInsetsListener((v,insets)->{
+      android.graphics.Insets i=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());
+      mainContent.setPadding(dp(16),dp(8)+i.top,dp(16),dp(8)+i.bottom);
+      if (settingsScreen != null) {
+          settingsScreen.setPadding(dp(16),dp(8)+i.top,dp(16),dp(8)+i.bottom);
+      }
+      return insets;
+  });
+  setContentView(root);
+
+  this.mainContent = mainContent;
+  root.addView(mainContent, new FrameLayout.LayoutParams(-1, -1));
+
   LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0, 0, 0, dp(16));
   LinearLayout headerTitles=new LinearLayout(this);headerTitles.setOrientation(1);
   String verName="1.4";
   try{verName=getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){}
-  TextView title=text("相簿整理員 v"+verName,22);title.setTypeface(null,1);headerTitles.addView(title);
-  TextView subtitle=text("離線掃描 · 邊掃邊整理 · 刪除與搬移",11);subtitle.setTextColor(ACCENT);headerTitles.addView(subtitle);
+  TextView title=text("相簿整理員",24);title.setTypeface(null,1);headerTitles.addView(title);
   header.addView(headerTitles,new LinearLayout.LayoutParams(0,-2,1));
-  header.addView(button("⚙ 設定",this::showSettingsDialog),new LinearLayout.LayoutParams(-2,dp(38)));
-  root.addView(header);
+  ImageView settingsBtn = new ImageView(this);
+  settingsBtn.setImageResource(R.drawable.ic_settings);
+  settingsBtn.setPadding(dp(12), dp(12), dp(12), dp(12));
+  settingsBtn.setBackgroundResource(android.R.attr.selectableItemBackgroundBorderless);
+  settingsBtn.setOnClickListener(v -> showSettingsDialog());
+  header.addView(settingsBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
+  mainContent.addView(header);
 
-  people=new CheckBox(this);people.setChecked(true);
-  bgScan=new CheckBox(this);bgScan.setChecked(getPreferences(0).getBoolean("bg_scan",false));
+  people=new android.widget.Switch(this);people.setChecked(true);
+  bgScan=new android.widget.Switch(this);bgScan.setChecked(getPreferences(0).getBoolean("bg_scan",false));
   bgScan.setOnCheckedChangeListener((v,checked)->getPreferences(0).edit().putBoolean("bg_scan",checked).apply());
 
   mediaTypeSpinner=new Spinner(this);
@@ -95,39 +122,116 @@ public class MainActivity extends Activity implements ScanService.ScanListener {
 
   srcLabel=text(" 來源：全部媒體",12);
 
-  LinearLayout actions=new LinearLayout(this);scan=button("開始掃描",this::requestScan);cancel=button("停止",()->{
+  LinearLayout actions=new LinearLayout(this);
+  scan=button("開始掃描",this::requestScan);
+  android.graphics.drawable.StateListDrawable sld = new android.graphics.drawable.StateListDrawable();
+  android.graphics.drawable.GradientDrawable gdDisabled = new android.graphics.drawable.GradientDrawable();
+  gdDisabled.setColor(0xff555555);
+  gdDisabled.setCornerRadius(dp(8));
+  android.graphics.drawable.GradientDrawable gdEnabled = new android.graphics.drawable.GradientDrawable();
+  gdEnabled.setColor(ACCENT);
+  gdEnabled.setCornerRadius(dp(8));
+  sld.addState(new int[]{-android.R.attr.state_enabled}, gdDisabled);
+  sld.addState(new int[]{}, gdEnabled);
+  scan.setBackground(sld);
+
+  android.content.res.ColorStateList textColorStateList = new android.content.res.ColorStateList(
+        new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
+        new int[]{0xffaaaaaa, BG}
+  );
+  scan.setTextColor(textColorStateList);
+
+  cancel=button("停止",()->{
    ScanService.cancelScan();
    status.setText("正在停止，已完成的掃描結果已保留…");
-  });cancel.setEnabled(false);
-LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(0, dp(48), 1);
-scanParams.setMargins(0, 0, dp(12), 0);
-actions.addView(scan, scanParams);
-actions.addView(cancel, new LinearLayout.LayoutParams(dp(80), dp(48)));
-root.addView(actions);
+  });
+  cancel.setVisibility(View.GONE);
+  LinearLayout.LayoutParams scanParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+  scanParams.setMargins(0, 0, dp(12), 0);
+  actions.addView(scan, scanParams);
+  actions.addView(cancel, new LinearLayout.LayoutParams(dp(80), dp(48)));
+  mainContent.addView(actions);
 
-  status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);root.addView(status);
-  LinearLayout tabs=new LinearLayout(this);String[] names={"重複","相似","人物","全部"};for(int i=0;i<4;i++){final int idx=i;Button tab=button(names[i],()->{mode=idx;limit=20;render();});tab.setTextSize(12);
-LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(0, dp(44), 1);
-tabParams.setMargins(dp(2), dp(16), dp(2), dp(8));
-tabs.addView(tab, tabParams);}root.addView(tabs);
-  list = new RecyclerView(this); list.setLayoutManager(new LinearLayoutManager(this)); adapter = new ItemAdapter(); list.setAdapter(adapter); root.addView(list, new LinearLayout.LayoutParams(-1,0,1));
-  selection=text("已選 0 個",12);root.addView(selection);
+  status=text("授權後可掃描手機相簿。僅能讀取 Android 允許的檔案。",12);mainContent.addView(status);
+  LinearLayout tabs=new LinearLayout(this);
+  tabs.setWeightSum(4);
+  android.graphics.drawable.GradientDrawable tabBg = new android.graphics.drawable.GradientDrawable();
+  tabBg.setColor(CARD);
+  tabBg.setCornerRadius(dp(8));
+  tabs.setBackground(tabBg);
+  tabs.setPadding(dp(4), dp(4), dp(4), dp(4));
+  String[] names={"重複","相似","人物","全部"};
+  tabButtons = new TextView[4];
+  for(int i=0;i<4;i++){
+    final int idx=i;
+    TextView tab=new TextView(this);
+    tab.setText(names[i]);
+    tab.setGravity(Gravity.CENTER);
+    tab.setTextSize(14);
+    tab.setTextColor(i==0?BG:TEXT_SEC);
 
-  LinearLayout footer=new LinearLayout(this);move=button("移到此資料夾",this::confirmMove);deleteBtn=button("刪除所選檔",this::confirmDelete);Button clear=button("取消勾選",()->{selected.clear();render();});
+    android.graphics.drawable.GradientDrawable activeBg = new android.graphics.drawable.GradientDrawable();
+    activeBg.setColor(ACCENT);
+    activeBg.setCornerRadius(dp(6));
+
+    if (i==0) tab.setBackground(activeBg);
+    else tab.setBackgroundColor(Color.TRANSPARENT);
+
+    tab.setOnClickListener(v->{
+      mode=idx;limit=20;
+      for(int j=0;j<4;j++) {
+        tabButtons[j].setTextColor(j==idx?BG:TEXT_SEC);
+        if(j==idx) tabButtons[j].setBackground(activeBg);
+        else tabButtons[j].setBackgroundColor(Color.TRANSPARENT);
+      }
+      render();
+    });
+    LinearLayout.LayoutParams tabParams = new LinearLayout.LayoutParams(0, dp(36), 1);
+    tabParams.setMargins(dp(2), 0, dp(2), 0);
+    tab.setLayoutParams(tabParams);
+    tabButtons[i] = tab;
+    tabs.addView(tab);
+  }
+  LinearLayout.LayoutParams tabsLp = new LinearLayout.LayoutParams(-1, -2);
+  tabsLp.setMargins(0, dp(16), 0, dp(16));
+  mainContent.addView(tabs, tabsLp);
+  list = new RecyclerView(this); list.setLayoutManager(new LinearLayoutManager(this)); adapter = new ItemAdapter(); list.setAdapter(adapter); mainContent.addView(list, new LinearLayout.LayoutParams(-1,0,1));
+  selection=text("已選 0 個",14);
+
+  LinearLayout footerContainer = new LinearLayout(this);
+  footerContainer.setOrientation(1);
+  footerContainer.setBackgroundColor(CARD);
+  footerContainer.setPadding(dp(16), dp(12), dp(16), dp(12));
+
+  if (selection.getParent() != null) ((ViewGroup)selection.getParent()).removeView(selection);
+  footerContainer.addView(selection, new LinearLayout.LayoutParams(-1, -2));
+  selection.setPadding(0, 0, 0, dp(8));
+
+  LinearLayout footer=new LinearLayout(this);
+  move=button("移到此資料夾",this::confirmMove);
+  deleteBtn=button("刪除所選檔",this::confirmDelete);
+  Button clear=button("取消勾選",()->{selected.clear();render();});
+
   LinearLayout.LayoutParams moveParams = new LinearLayout.LayoutParams(0, dp(46), 1);
-moveParams.setMargins(0, 0, dp(8), 0);
-footer.addView(move, moveParams);
-LinearLayout.LayoutParams delParams = new LinearLayout.LayoutParams(0, dp(46), 1);
-delParams.setMargins(0, 0, dp(8), 0);
-footer.addView(deleteBtn, delParams);
-footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
-  root.addView(footer);
+  moveParams.setMargins(0, 0, dp(8), 0);
+  footer.addView(move, moveParams);
+
+  LinearLayout.LayoutParams delParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+  delParams.setMargins(0, 0, dp(8), 0);
+  footer.addView(deleteBtn, delParams);
+
+  footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
+
+  footerContainer.addView(footer);
+  footerContainer.setVisibility(View.GONE);
+  this.footerContainer = footerContainer;
+  mainContent.addView(footerContainer, new LinearLayout.LayoutParams(-1, -2));
 
   resultGeneration=ScanService.getGeneration();
   Scanner.Result cached=loadScanCache();
   if(cached!=null&&!cached.all.isEmpty()){
    result=cached;
-   status.setText("已載入上次記錄 · "+cached.all.size()+" 個檔案 · "+cached.exact.size()+" 組重複 · "+cached.similar.size()+" 組相似");
+   status.setText("已載入上次記錄\n" + cached.all.size() + " 個檔案 · " + cached.exact.size() + " 組重複 · " + cached.similar.size() + " 組相似");
   }
   render();
 
@@ -159,7 +263,7 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   boolean[] checked=new boolean[items.length];
   Set<String> tempFilters=new TreeSet<>(sourceFilters);
   for(int i=0;i<items.length;i++)checked[i]=tempFilters.contains(items[i]+"/");
-  new AlertDialog.Builder(this).setTitle("選擇來源資料夾（可多選）").setMultiChoiceItems(items,checked,(dialog,which,isChecked)->{
+  new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("選擇來源資料夾（可多選）").setMultiChoiceItems(items,checked,(dialog,which,isChecked)->{
    String path=items[which]+"/";
    if(isChecked)tempFilters.add(path);
    else tempFilters.remove(path);
@@ -275,7 +379,7 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
 
  public void onComplete(Scanner.Result scanned, long generation){
   ui(()->{
-   setBusy(false);
+   setBusy(false); if (cancel != null) cancel.setVisibility(View.GONE);
    if(generation<resultGeneration)return;
    resultGeneration=generation;
    result=scanned;
@@ -295,7 +399,7 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
 
  public void onError(String message, long generation){
   ui(()->{
-   setBusy(false);
+   setBusy(false); if (cancel != null) cancel.setVisibility(View.GONE);
    if(generation<resultGeneration)return;
    resultGeneration=generation;
    if(result!=null)saveScanCache(result);
@@ -335,7 +439,16 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
      }
      public int getItemViewType(int pos) { return data.get(pos).type; }
      public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-         if (viewType == 0) {
+         if (viewType == 3) {
+             LinearLayout empty = new LinearLayout(MainActivity.this); empty.setOrientation(1); empty.setGravity(Gravity.CENTER);
+             empty.setPadding(0, dp(40), 0, dp(40));
+             ImageView icon = new ImageView(MainActivity.this); icon.setImageResource(R.drawable.ic_empty);
+             empty.addView(icon, new LinearLayout.LayoutParams(dp(64), dp(64)));
+             TextView desc = text("", 14); desc.setGravity(Gravity.CENTER); desc.setTextColor(TEXT_SEC);
+             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, dp(16), 0, 0);
+             empty.addView(desc, lp);
+             return new RecyclerView.ViewHolder(empty) {};
+         } else if (viewType == 0) {
              TextView t = text("", 15); t.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
              return new RecyclerView.ViewHolder(t) {};
          } else if (viewType == 1) {
@@ -361,7 +474,14 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
                 gd.setCornerRadius(dp(8));
                 row.setBackground(gd);
              CheckBox box = new CheckBox(MainActivity.this); box.setId(201); row.addView(box, new LinearLayout.LayoutParams(dp(40),dp(96)));
-             ImageView thumb = new ImageView(MainActivity.this); thumb.setId(202); thumb.setScaleType(ImageView.ScaleType.CENTER_CROP); row.addView(thumb, new LinearLayout.LayoutParams(dp(96),dp(96)));
+             FrameLayout thumbContainer = new FrameLayout(MainActivity.this);
+             ImageView thumb = new ImageView(MainActivity.this); thumb.setId(202); thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+             thumbContainer.addView(thumb, new FrameLayout.LayoutParams(dp(96),dp(96)));
+             ImageView videoIcon = new ImageView(MainActivity.this); videoIcon.setId(205); videoIcon.setImageResource(R.drawable.ic_video); videoIcon.setVisibility(View.GONE);
+             FrameLayout.LayoutParams vidLp = new FrameLayout.LayoutParams(dp(24), dp(24), Gravity.BOTTOM | Gravity.START);
+             vidLp.setMargins(dp(4), 0, 0, dp(4));
+             thumbContainer.addView(videoIcon, vidLp);
+             row.addView(thumbContainer, new LinearLayout.LayoutParams(dp(96),dp(96)));
              TextView label = text("", 11); label.setId(203); label.setMaxLines(2); label.setEllipsize(android.text.TextUtils.TruncateAt.END);
              LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,-2,1); lp.setMargins(dp(8),0,0,0); row.addView(label, lp);
              FrameLayout mask = new FrameLayout(MainActivity.this); mask.setId(204); mask.setBackgroundColor(0x3372d9c3); mask.setVisibility(View.GONE); row.addView(mask, new LinearLayout.LayoutParams(-1, -1));
@@ -370,7 +490,10 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
      }
      public void onBindViewHolder(RecyclerView.ViewHolder holder, int pos) {
          ListItem item = data.get(pos);
-         if (item.type == 0) {
+         if (item.type == 3) {
+             LinearLayout v = (LinearLayout)holder.itemView;
+             ((TextView)v.getChildAt(1)).setText(item.text);
+         } else if (item.type == 0) {
              ((TextView)holder.itemView).setText(item.text);
          } else if (item.type == 1) {
              View v = holder.itemView;
@@ -395,6 +518,8 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
              CheckBox box = v.findViewById(201); box.setOnCheckedChangeListener(null); box.setChecked(item.checked);
              box.setOnCheckedChangeListener((cb, checked) -> { if(checked) selected.add(item.item); else selected.remove(item.item); updateSelection(); item.checked = checked; v.findViewById(204).setVisibility(checked?View.VISIBLE:View.GONE); });
              ImageView thumb = v.findViewById(202); thumb.setImageBitmap(null);
+             ImageView videoIcon = v.findViewById(205);
+             if (videoIcon != null) videoIcon.setVisibility(item.item.video ? View.VISIBLE : View.GONE);
              if (item.item.thumb != null) {
                  android.graphics.Bitmap c = thumbCache.get(item.item.thumb.getPath());
                  if (c != null) thumb.setImageBitmap(c);
@@ -407,7 +532,7 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
              }
              thumb.setOnClickListener(img -> preview(item.item));
              TextView label = v.findViewById(203);
-             String textLabel = (item.item.video ? "▶ " : "") + item.item.name + "\n" + format(item.item.size) + (item.item.video ? " · " + item.item.duration / 1000 + " 秒" : "") + "\n" + item.item.path;
+             String textLabel = item.item.name + "\n" + format(item.item.size) + (item.item.video ? " · " + item.item.duration / 1000 + " 秒" : "") + "\n" + item.item.path;
 
 
              label.setText(textLabel);
@@ -444,48 +569,163 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
       }
   }
   if(displayed>limit) newData.add(new ListItem(0, null, null, "顯示更多群組...", false));
-  if(displayed==0) newData.add(new ListItem(0, null, null, mode==2?"沒有跨檔案的人物群組。需有清楚正面人臉；人物分析選項須在掃描前啟用。":"此分類尚無符合項目。", false));
+  if(displayed==0) {
+      newData.add(new ListItem(3, null, null, mode==2?"沒有跨檔案的人物群組。需有清楚正面人臉；人物分析選項須在掃描前啟用。":"此分類尚無符合項目，請嘗試查看其他分類。", false));
+  }
   if (adapter != null) adapter.update(newData);
  }
  private Bitmap smallThumb(File file){BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;return BitmapFactory.decodeFile(file.getPath(),options);}
+ private View settingsScreen;
  private void showSettingsDialog(){
-  LinearLayout layout=new LinearLayout(this);layout.setOrientation(1);layout.setPadding(dp(16),dp(12),dp(16),dp(12));
-  Button srcBtn=button("選擇來源資料夾",this::selectSourceFolder);
-  layout.addView(srcBtn,new LinearLayout.LayoutParams(-1,dp(42)));
-  if(srcLabel.getParent()!=null)((android.view.ViewGroup)srcLabel.getParent()).removeView(srcLabel);
-  layout.addView(srcLabel,new LinearLayout.LayoutParams(-1,-2));
+  if (settingsScreen != null) {
+      settingsScreen.setVisibility(View.VISIBLE);
+      mainContent.setVisibility(View.GONE);
+      return;
+  }
 
-  people.setText("同時分析人物（較耗時）");people.setTextColor(TEXT);
-  if(people.getParent()!=null)((android.view.ViewGroup)people.getParent()).removeView(people);
-  layout.addView(people);
+  ScrollView scroll = new ScrollView(this);
+  scroll.setBackgroundColor(BG);
+  settingsScreen = scroll;
 
-  bgScan.setText("背景鎖屏繼續掃描 (前台服務/WakeLock)");bgScan.setTextColor(TEXT);
-  if(bgScan.getParent()!=null)((android.view.ViewGroup)bgScan.getParent()).removeView(bgScan);
-  layout.addView(bgScan);
+  LinearLayout rootLayout = new LinearLayout(this);
+  rootLayout.setOrientation(LinearLayout.VERTICAL);
+  rootLayout.setPadding(dp(16), dp(16), dp(16), dp(32));
+  scroll.addView(rootLayout);
 
-  LinearLayout mBox=new LinearLayout(this);mBox.setGravity(Gravity.CENTER_VERTICAL);
-  mBox.addView(text("媒體種類：",12));
-  if(mediaTypeSpinner.getParent()!=null)((android.view.ViewGroup)mediaTypeSpinner.getParent()).removeView(mediaTypeSpinner);
-  mBox.addView(mediaTypeSpinner,new LinearLayout.LayoutParams(-1,-2));
-  layout.addView(mBox);
+  // Header
+  LinearLayout header = new LinearLayout(this);
+  header.setGravity(Gravity.CENTER_VERTICAL);
+  header.setPadding(0, 0, 0, dp(24));
+  ImageView backBtn = new ImageView(this);
+  backBtn.setImageResource(R.drawable.ic_back);
+  backBtn.setPadding(dp(12), dp(12), dp(12), dp(12));
+  backBtn.setBackgroundResource(android.R.attr.selectableItemBackgroundBorderless);
+  backBtn.setOnClickListener(v -> {
+      settingsScreen.setVisibility(View.GONE);
+      mainContent.setVisibility(View.VISIBLE);
+  });
+  header.addView(backBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
 
-  LinearLayout sBox=new LinearLayout(this);sBox.setGravity(Gravity.CENTER_VERTICAL);
-  sBox.addView(text("相似程度：",12));
-  if(strictness.getParent()!=null)((android.view.ViewGroup)strictness.getParent()).removeView(strictness);
-  sBox.addView(strictness,new LinearLayout.LayoutParams(-1,-2));
-  layout.addView(sBox);
+  TextView title = text("設定", 20);
+  title.setTypeface(null, 1);
+  LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, -2, 1);
+  titleLp.setMargins(dp(16), 0, 0, 0);
+  header.addView(title, titleLp);
 
-  Button undoBtn=button("復原上次移動",this::undo);
-  layout.addView(undoBtn,new LinearLayout.LayoutParams(-1,dp(42)));
+  rootLayout.addView(header);
 
-  Button helpBtn=button("說明／清除快取",this::help);
-  layout.addView(helpBtn,new LinearLayout.LayoutParams(-1,dp(42)));
+  // Group: 掃描範圍
+  rootLayout.addView(settingsTitle("掃描範圍"));
+  LinearLayout scanScopeCard = createCard();
+  if(srcLabel.getParent()!=null)((ViewGroup)srcLabel.getParent()).removeView(srcLabel);
+  srcLabel.setTextSize(14);
+  scanScopeCard.addView(srcLabel, new LinearLayout.LayoutParams(-1, -2));
 
-  Dialog d = new Dialog(this, android.R.style.Theme_DeviceDefault_Light_Dialog); d.setContentView(layout); d.getWindow().setGravity(Gravity.BOTTOM); d.getWindow().setLayout(-1, -2); d.show();
+  Button srcBtn = button("選擇來源資料夾", this::selectSourceFolder);
+  LinearLayout.LayoutParams srcBtnLp = new LinearLayout.LayoutParams(-1, dp(42));
+  srcBtnLp.setMargins(0, dp(12), 0, 0);
+  scanScopeCard.addView(srcBtn, srcBtnLp);
+  rootLayout.addView(scanScopeCard);
+
+  // Group: 分析選項
+  rootLayout.addView(settingsTitle("分析選項"));
+  LinearLayout analysisCard = createCard();
+
+  if(people.getParent()!=null)((ViewGroup)people.getParent()).removeView(people);
+  people.setText("同時分析人物 (較耗時)");
+  people.setTextColor(TEXT);
+  analysisCard.addView(people, new LinearLayout.LayoutParams(-1, -2));
+
+  if(bgScan.getParent()!=null)((ViewGroup)bgScan.getParent()).removeView(bgScan);
+  bgScan.setText("鎖屏後繼續掃描");
+  bgScan.setTextColor(TEXT);
+  LinearLayout.LayoutParams bgScanLp = new LinearLayout.LayoutParams(-1, -2);
+  bgScanLp.setMargins(0, dp(8), 0, 0);
+  analysisCard.addView(bgScan, bgScanLp);
+
+  TextView bgHint = text("開啟以在背景持續掃描，不因螢幕關閉中斷", 12);
+  bgHint.setTextColor(TEXT_SEC);
+  bgHint.setPadding(dp(32), 0, 0, 0);
+  analysisCard.addView(bgHint);
+
+  LinearLayout mBox = new LinearLayout(this); mBox.setGravity(Gravity.CENTER_VERTICAL);
+  mBox.setPadding(dp(8), dp(16), 0, 0);
+  mBox.addView(text("媒體種類：", 14));
+  if(mediaTypeSpinner.getParent()!=null)((ViewGroup)mediaTypeSpinner.getParent()).removeView(mediaTypeSpinner);
+  mBox.addView(mediaTypeSpinner, new LinearLayout.LayoutParams(-1, -2));
+  analysisCard.addView(mBox);
+
+  LinearLayout sBox = new LinearLayout(this); sBox.setGravity(Gravity.CENTER_VERTICAL);
+  sBox.setPadding(dp(8), dp(16), 0, dp(8));
+  sBox.addView(text("相似程度：", 14));
+  if(strictness.getParent()!=null)((ViewGroup)strictness.getParent()).removeView(strictness);
+  sBox.addView(strictness, new LinearLayout.LayoutParams(-1, -2));
+  analysisCard.addView(sBox);
+
+  rootLayout.addView(analysisCard);
+
+  // Group: 工具
+  rootLayout.addView(settingsTitle("工具"));
+  LinearLayout toolsCard = createCard();
+
+  Button undoBtn = button("復原上次移動", this::undo);
+  toolsCard.addView(undoBtn, new LinearLayout.LayoutParams(-1, dp(42)));
+
+  Button cacheBtn = button("清除縮圖快取", ()->{
+    selected.clear();result=null;clearThumbs();status.setText("縮圖快取已清除，請重新掃描。");render();
+  });
+  LinearLayout.LayoutParams cacheBtnLp = new LinearLayout.LayoutParams(-1, dp(42));
+  cacheBtnLp.setMargins(0, dp(12), 0, 0);
+  toolsCard.addView(cacheBtn, cacheBtnLp);
+
+  Button helpBtn = button("使用說明與隱私", this::help);
+  LinearLayout.LayoutParams helpBtnLp = new LinearLayout.LayoutParams(-1, dp(42));
+  helpBtnLp.setMargins(0, dp(12), 0, 0);
+  toolsCard.addView(helpBtn, helpBtnLp);
+
+  rootLayout.addView(toolsCard);
+
+  // App Version
+  String verName="1.4";
+  try{verName=getPackageManager().getPackageInfo(getPackageName(),0).versionName;}catch(Exception e){}
+  TextView ver = text("相簿整理員 v" + verName, 12);
+  ver.setTextColor(TEXT_SEC);
+  ver.setGravity(Gravity.CENTER);
+  LinearLayout.LayoutParams verLp = new LinearLayout.LayoutParams(-1, -2);
+  verLp.setMargins(0, dp(24), 0, dp(16));
+  rootLayout.addView(ver, verLp);
+
+  root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+  mainContent.setVisibility(View.GONE);
+ }
+
+ private TextView settingsTitle(String titleText) {
+     TextView t = text(titleText, 14);
+     t.setTextColor(TEXT_SEC);
+     t.setPadding(dp(8), dp(16), 0, dp(8));
+     return t;
+ }
+
+ private LinearLayout createCard() {
+     LinearLayout card = new LinearLayout(this);
+     card.setOrientation(LinearLayout.VERTICAL);
+     android.graphics.drawable.GradientDrawable gd = new android.graphics.drawable.GradientDrawable();
+     gd.setColor(CARD);
+     gd.setCornerRadius(dp(16));
+     card.setBackground(gd);
+     card.setPadding(dp(16), dp(16), dp(16), dp(16));
+     return card;
  }
  private String format(long bytes){return String.format(Locale.TAIWAN,"%.1f MB",bytes/1048576.0);}
- private void updateSelection(){long total=0;for(Scanner.Item i:selected)total+=i.size;selection.setText("已選 "+selected.size()+" 個 · "+format(total));if(scan!=null)scan.setEnabled(!busy&&!fileBusy);if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);}
- private void preview(Scanner.Item item){try{Intent intent=new Intent(Intent.ACTION_VIEW);intent.setDataAndType(item.uri,item.mime!=null?item.mime:item.video?"video/*":"image/*");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(intent);}catch(ActivityNotFoundException e){new AlertDialog.Builder(this).setMessage("手機沒有可開啟此媒體的應用程式。").setPositiveButton("確定",null).show();}}
+ private void updateSelection(){
+  long total=0;for(Scanner.Item i:selected)total+=i.size;
+  selection.setText("已選 "+selected.size()+" 個 · "+format(total));
+  if(scan!=null)scan.setEnabled(!busy&&!fileBusy);
+  if(move!=null)move.setEnabled(!selected.isEmpty()&&!fileBusy);
+  if(deleteBtn!=null)deleteBtn.setEnabled(!selected.isEmpty()&&!fileBusy);
+  if(footerContainer!=null) footerContainer.setVisibility(selected.isEmpty() ? View.GONE : View.VISIBLE);
+ }
+ private void preview(Scanner.Item item){try{Intent intent=new Intent(Intent.ACTION_VIEW);intent.setDataAndType(item.uri,item.mime!=null?item.mime:item.video?"video/*":"image/*");intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(intent);}catch(ActivityNotFoundException e){new androidx.appcompat.app.AlertDialog.Builder(this).setMessage("手機沒有可開啟此媒體的應用程式。").setPositiveButton("確定",null).show();}}
  private String validateDestination(String input){
   if(input==null)input="";input=input.trim();
   if(input.endsWith("/"))input=input.substring(0,input.length()-1);
@@ -500,12 +740,12 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   List<String> folders=getMediaSubfolders();
   folders.add("[ 新增/手動輸入資料夾… ]");
   String[] items=folders.toArray(new String[0]);
-  new AlertDialog.Builder(this).setTitle("選擇移入的目的資料夾").setItems(items,(dialog,which)->{
+  new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("選擇移入的目的資料夾").setItems(items,(dialog,which)->{
    if(which==items.length-1){
     EditText input=new EditText(this);
     input.setHint("請輸入目的資料夾名稱");
     input.setText(getPreferences(0).getString("folder","整理收藏"));
-    new AlertDialog.Builder(this).setTitle("輸入目的資料夾名稱").setView(input).setPositiveButton("確定",(d,w)->promptMoveConfirmation(input.getText().toString())).setNegativeButton("取消",null).show();
+    new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("輸入目的資料夾名稱").setView(input).setPositiveButton("確定",(d,w)->promptMoveConfirmation(input.getText().toString())).setNegativeButton("取消",null).show();
    }else{
     promptMoveConfirmation(items[which]);
    }
@@ -513,7 +753,7 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
  }
  private void promptMoveConfirmation(String folderName){
   String target=validateDestination(folderName);if(target==null)return;ArrayList<Scanner.Item> snapshot=new ArrayList<>(selected);
-  new AlertDialog.Builder(this).setTitle("確認移動 "+snapshot.size()+" 個檔案").setMessage("目的地："+target+"\n移動後會離開原資料夾；不刪除重複檔。相似與人物分組請先確認。\n同名檔會加上識別碼，不覆蓋既有檔案。\n這次成功的移動會取代上次復原紀錄。").setNegativeButton("取消",null).setPositiveButton("移動",(d,w)->{destination=target;pending=new ArrayList<>();for(Scanner.Item item:snapshot)if(!target.equals(item.path)){MoveRecord r=new MoveRecord();r.uri=item.uri;r.oldPath=item.path;r.oldName=item.name;r.newPath=target;r.newName=item.name;r.item=item;pending.add(r);}undoing=false;isDeleting=false;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;backupJournal();updateSelection();requestWrite();}).show();
+  new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("確認移動 "+snapshot.size()+" 個檔案").setMessage("目的地："+target+"\n移動後會離開原資料夾；不刪除重複檔。相似與人物分組請先確認。\n同名檔會加上識別碼，不覆蓋既有檔案。\n這次成功的移動會取代上次復原紀錄。").setNegativeButton("取消",null).setPositiveButton("移動",(d,w)->{destination=target;pending=new ArrayList<>();for(Scanner.Item item:snapshot)if(!target.equals(item.path)){MoveRecord r=new MoveRecord();r.uri=item.uri;r.oldPath=item.path;r.oldName=item.name;r.newPath=target;r.newName=item.name;r.item=item;pending.add(r);}undoing=false;isDeleting=false;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;backupJournal();updateSelection();requestWrite();}).show();
  }
  private void confirmDelete(){
   if(selected.isEmpty()||fileBusy)return;
@@ -793,8 +1033,8 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   }
  }
  private synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
- private void undo(){if(fileBusy||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{pending=new ArrayList<>();for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");pending.add(r);}undoing=true;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
- private void help(){new AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setNegativeButton("關閉",null).setPositiveButton("清除縮圖快取",(d,w)->{selected.clear();result=null;clearThumbs();status.setText("縮圖快取已清除，請重新掃描。");render();}).show();}
+ private void undo(){if(fileBusy||busy)return;try{JSONArray a=readJournal();if(a.length()==0){status.setText("沒有可復原的移動紀錄。");return;}new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("復原上次移動").setMessage("將 "+a.length()+" 個紀錄移回原資料夾。同名檔會加識別碼；已不存在的檔案會列為失敗。").setNegativeButton("取消",null).setPositiveButton("復原",(d,w)->{try{pending=new ArrayList<>();for(int i=0;i<a.length();i++){JSONObject o=a.getJSONObject(i);MoveRecord r=new MoveRecord();r.uri=Uri.parse(o.getString("uri"));r.newPath=o.getString("path");r.newName=o.getString("name");pending.add(r);}undoing=true;operationHasSuccess=false;operationMoved=operationFailed=0;fileBusy=true;updateSelection();requestWrite();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}).show();}catch(Exception e){status.setText("復原紀錄無法讀取。");}}
+ private void help(){new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("使用說明與隱私").setMessage("1. 授權所有照片與影片後開始掃描。可篩選來源資料夾，或對全相簿掃描。\n2. 重複採 SHA-256；相似照片使用感知雜湊、色彩與比例，影片抽取 7 個畫面。\n3. 人物在手機內用 MobileFaceNet 比對抽樣人臉；分數不是準確率。正面清楚人臉效果較好。\n4. 掃描過程中即可即時勾選檔案進行『移到此資料夾』或『刪除』。\n5. 不自動刪除、不上傳、不在背景持續監控。\n6. 復原只保留上次移動批次。清快取只移除本程式縮圖，不動原照片／影片。").setPositiveButton("關閉",null).show();}
  private void clearThumbs(){resultGeneration = ScanService.clearCacheAsync(this);}
  private File cacheFile(){return new File(getFilesDir(),"scan-cache.json");}
  public void saveScanCache(Scanner.Result res){
@@ -826,6 +1066,17 @@ footer.addView(clear,new LinearLayout.LayoutParams(dp(90),dp(46)));
   }
   return list;
  }
+
+ @Override
+ public void onBackPressed() {
+     if (settingsScreen != null && settingsScreen.getVisibility() == View.VISIBLE) {
+         settingsScreen.setVisibility(View.GONE);
+         mainContent.setVisibility(View.VISIBLE);
+         return;
+     }
+     super.onBackPressed();
+ }
+
  protected void onDestroy(){
   dead=true;
   ScanService.removeListener(this);
