@@ -128,7 +128,7 @@ public class ScanService extends Service {
                         ScanListener l = activeListener;
                         if (l != null) l.onPartialResult(partial, jobGen);
                     }
-                }, faces, new int[]{5, 8, 12}[setting], new double[]{.72, .65, .58}[setting], filters, mediaType);
+                }, faces, new int[]{5, 8, 12}[setting], new double[]{.72, .65, .58}[setting], filters, mediaType, jobGen);
 
                 Scanner.Result scanned = scanner.run();
                 currentSnapshot = scanned;
@@ -173,16 +173,28 @@ public class ScanService extends Service {
     private static void performClearCache(Context context) {
         if (context == null) return;
         synchronized (CACHE_LOCK) {
-            File directory = new File(context.getCacheDir(), "thumbs");
-            File[] files = directory.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    f.delete();
+            File cacheDir = context.getCacheDir();
+            File[] dirs = cacheDir.listFiles();
+            if (dirs != null) {
+                for (File d : dirs) {
+                    if (d.isDirectory() && d.getName().startsWith("thumbs_")) {
+                        File[] files = d.listFiles();
+                        if (files != null) {
+                            for (File f : files) {
+                                f.delete();
+                            }
+                        }
+                        d.delete();
+                    }
                 }
             }
             File cache = cacheFile(context);
             if (cache.exists()) {
                 cache.delete();
+            }
+            File deleted = new File(context.getFilesDir(), "scan-cache.deleted");
+            if (deleted.exists()) {
+                deleted.delete();
             }
             File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
             if (tmp.exists()) {
@@ -192,9 +204,18 @@ public class ScanService extends Service {
     }
 
     public static long clearCacheAsync(Context context) {
+        cancelScan();
         long gen = currentGeneration.incrementAndGet();
         if (context != null) {
             Context appContext = context.getApplicationContext();
+            synchronized (CACHE_LOCK) {
+                File cache = cacheFile(appContext);
+                if (cache.exists()) {
+                    File deleted = new File(appContext.getFilesDir(), "scan-cache.deleted");
+                    if (deleted.exists()) deleted.delete();
+                    cache.renameTo(deleted);
+                }
+            }
             ioExecutor.execute(() -> performClearCache(appContext));
         }
         return gen;
@@ -239,6 +260,7 @@ public class ScanService extends Service {
                         root.put("unreadable", res.unreadable);
                         root.put("faceFailures", res.faceFailures);
                         root.put("faceError", res.faceError);
+                        root.put("generation", generation);
                     }
                     File tmp = new File(context.getFilesDir(), "scan-cache.tmp");
                     try (FileOutputStream out = new FileOutputStream(tmp)) {
