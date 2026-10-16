@@ -44,8 +44,8 @@ final class Scanner {
   }
  }
  interface Progress {void report(String s);boolean cancelled();void onPartialResult(Result partial);}
- final Context context;final Progress progress;final boolean people;final int bits;final double faceThreshold;final Set<String> sourceFilters;final int mediaType;
- Scanner(Context c,Progress p,boolean f,int b,double t,Set<String> srcs,int m){context=c;progress=p;people=f;bits=b;faceThreshold=t;sourceFilters=srcs!=null?srcs:Collections.emptySet();mediaType=m;}
+ final Context context;final Progress progress;final boolean people;final int bits;final double faceThreshold;final Set<String> sourceFilters;final int mediaType;final long generation;
+ Scanner(Context c,Progress p,boolean f,int b,double t,Set<String> srcs,int m,long gen){context=c;progress=p;people=f;bits=b;faceThreshold=t;sourceFilters=srcs!=null?srcs:Collections.emptySet();mediaType=m;generation=gen;}
  private void check(Result result)throws InterruptedException{if(progress!=null&&(progress.cancelled()||Thread.currentThread().isInterrupted())){progress.onPartialResult(result.snapshot());throw new InterruptedException();}}
  Result run()throws Exception{
   Result result=new Result();
@@ -171,7 +171,7 @@ final class Scanner {
   }}catch(Exception e){result.faceFailures++;}
  }
  private File writeThumb(Bitmap bitmap,String prefix)throws IOException{
-  File directory=new File(context.getCacheDir(),"thumbs");directory.mkdirs();File file=new File(directory,prefix+UUID.randomUUID()+".jpg");
+  File directory=new File(context.getCacheDir(),"thumbs_" + generation);directory.mkdirs();File file=new File(directory,prefix+UUID.randomUUID()+".jpg");
   float scale=Math.min(1f,220f/Math.max(bitmap.getWidth(),bitmap.getHeight()));Bitmap thumb=Bitmap.createScaledBitmap(bitmap,Math.max(1,(int)(bitmap.getWidth()*scale)),Math.max(1,(int)(bitmap.getHeight()*scale)),true);
   try(OutputStream out=new FileOutputStream(file)){thumb.compress(Bitmap.CompressFormat.JPEG,80,out);}finally{if(thumb!=bitmap)thumb.recycle();}return file;
  }
