@@ -9,3 +9,4 @@ android {
  buildTypes { debug { signingConfig signingConfigs.localTesting }; release { signingConfig signingConfigs.localTesting; minifyEnabled false } }
 }
 dependencies { implementation 'org.tensorflow:tensorflow-lite:2.16.1' }
+dependencies { implementation 'androidx.recyclerview:recyclerview:1.3.2' }
