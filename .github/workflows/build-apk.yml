@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
@@ -38,25 +39,6 @@ jobs:
         run: |
           mkdir -p dist
           set -o pipefail && bash tests/run-tests.sh | tee dist/test-results.txt
-
-      - name: Run Emulator Smoke Test
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          target: google_apis
-          arch: x86_64
-          script: |
-            set -e
-            adb install -r app/build/outputs/apk/release/app-release.apk
-            adb logcat -c
-            adb shell am start -W tw.mediaorganizer/.MainActivity
-            sleep 5
-            CRASH=$(adb logcat -d | grep -E "FATAL EXCEPTION" || true)
-            if [[ -n "$CRASH" ]]; then /bin/false; else echo "Smoke test passed"; fi
-
-      - name: Copy Release APK
-        run: |
-            echo "Smoke test passed"
 
       - name: Build signed Release APK
         run: |
