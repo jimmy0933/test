@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MediaOrganizer" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+        <item name="android:windowBackground">@color/colorBackground</item>
+        <item name="android:textColorPrimary">@color/colorTextMain</item>
+        <item name="android:textColorSecondary">@color/colorTextSecondary</item>
+        <!-- Dialog themes -->
+        <item name="android:dialogTheme">@style/CustomDialogTheme</item>
+        <item name="dialogTheme">@style/CustomDialogTheme</item>
+        <item name="alertDialogTheme">@style/CustomAlertDialogTheme</item>
+    </style>
+
+    <style name="CustomDialogTheme" parent="Theme.AppCompat.Dialog">
+        <item name="android:windowBackground">@color/colorPanel</item>
+        <item name="android:textColorPrimary">@color/colorTextMain</item>
+        <item name="android:textColorSecondary">@color/colorTextSecondary</item>
+        <item name="colorAccent">@color/colorAccent</item>
+    </style>
+
+    <style name="CustomAlertDialogTheme" parent="Theme.AppCompat.Dialog.Alert">
+        <item name="android:windowBackground">@color/colorPanel</item>
+        <item name="android:textColorPrimary">@color/colorTextMain</item>
+        <item name="android:textColorSecondary">@color/colorTextSecondary</item>
+        <item name="colorAccent">@color/colorAccent</item>
+    </style>
+</resources>
