@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
+
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
@@ -42,6 +43,60 @@ jobs:
       - name: Build signed Release APK
         run: |
           gradle --no-daemon --max-workers=2 -Dorg.gradle.jvmargs=-Xmx2g :app:assembleRelease
+
+
+      - name: Run Emulator Smoke Test Manually
+        run: |
+          set -e
+          # Ensure platform-tools is installed to get adb
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" > /dev/null
+
+          # Use sdkmanager to install emulator and images
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "system-images;android-30;google_apis;x86_64" "emulator" > /dev/null
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n testDevice -k "system-images;android-30;google_apis;x86_64" --device "pixel"
+
+          # Start emulator in background with no acceleration
+          "$ANDROID_HOME/emulator/emulator" -avd testDevice -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off > emulator.log 2>&1 &
+
+          ADB="$ANDROID_HOME/platform-tools/adb"
+
+          # Wait for emulator
+          $ADB wait-for-device
+
+          # Poll until boot completed
+          for i in {1..40}; do
+             boot_completed=$($ADB shell getprop sys.boot_completed | tr -d '\r' || true)
+             if [ "$boot_completed" == "1" ]; then
+                echo "Emulator booted successfully"
+                break
+             fi
+             sleep 10
+          done
+
+          # Give it a bit more time after boot completed property is set
+          sleep 10
+
+          # Dismiss lock screen
+          $ADB shell input keyevent 82 || true
+
+          # Install and run
+          $ADB install -r app/build/outputs/apk/release/app-release.apk
+          $ADB logcat -c
+          $ADB shell am start -W tw.mediaorganizer/.MainActivity
+          sleep 5
+          CRASH=$($ADB logcat -d | grep -E "FATAL EXCEPTION" || true)
+          if [[ -n "$CRASH" ]]; then
+             echo "Crash: $CRASH"
+             /bin/false
+          else
+             echo "Smoke test passed"
+          fi
+
+          # Cleanup
+          $ADB emu kill || true
+
+      - name: Copy Release APK
+        run: |
           cp app/build/outputs/apk/release/app-release.apk dist/Media-Organizer.apk
 
       - name: Verify signature, metadata, model, and native libraries

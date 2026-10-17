@@ -99,7 +99,10 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   ImageView settingsBtn = new ImageView(this);
   settingsBtn.setImageResource(R.drawable.ic_settings);
   settingsBtn.setPadding(dp(12), dp(12), dp(12), dp(12));
-  settingsBtn.setBackgroundResource(android.R.attr.selectableItemBackgroundBorderless);
+  android.util.TypedValue outValue = new android.util.TypedValue();
+  if (getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, outValue, true)) {
+      settingsBtn.setBackgroundResource(outValue.resourceId);
+  }
   settingsBtn.setOnClickListener(v -> showSettingsDialog());
   header.addView(settingsBtn, new LinearLayout.LayoutParams(dp(48), dp(48)));
   mainContent.addView(header);
@@ -599,7 +602,10 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   ImageView backBtn = new ImageView(this);
   backBtn.setImageResource(R.drawable.ic_back);
   backBtn.setPadding(dp(12), dp(12), dp(12), dp(12));
-  backBtn.setBackgroundResource(android.R.attr.selectableItemBackgroundBorderless);
+  android.util.TypedValue outValueBack = new android.util.TypedValue();
+  if (getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, outValueBack, true)) {
+      backBtn.setBackgroundResource(outValueBack.resourceId);
+  }
   backBtn.setOnClickListener(v -> {
       settingsScreen.setVisibility(View.GONE);
       mainContent.setVisibility(View.VISIBLE);
