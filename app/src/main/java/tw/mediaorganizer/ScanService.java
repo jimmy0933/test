@@ -166,6 +166,10 @@ public class ScanService extends Service {
         return currentGeneration.get();
     }
 
+    public static void setGeneration(long generation) {
+        currentGeneration.set(generation);
+    }
+
     public static long getCurrentScanGeneration() {
         return currentScanGeneration;
     }
