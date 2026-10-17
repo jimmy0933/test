@@ -81,13 +81,33 @@ jobs:
 
           # Install and run
           $ADB install -r app/build/outputs/apk/release/app-release.apk
-          $ADB logcat -c
-          $ADB shell am start -W tw.mediaorganizer/.MainActivity
-          sleep 5
-          CRASH=$($ADB logcat -d | grep -E "FATAL EXCEPTION" || true)
-          if [[ -n "$CRASH" ]]; then
-             echo "Crash: $CRASH"
-             /bin/false
+
+          CRASH_FOUND=false
+          for run_idx in {1..5}; do
+             echo "--- Cold start run $run_idx ---"
+             $ADB logcat -c
+             $ADB shell am force-stop tw.mediaorganizer
+             $ADB shell am start -W tw.mediaorganizer/.MainActivity
+             sleep 30
+             $ADB logcat -d > "dist/logcat_run_${run_idx}.txt"
+             CRASH=$($ADB logcat -d | grep -E "FATAL EXCEPTION" || true)
+             if [[ -n "$CRASH" ]]; then
+                echo "Crash detected on run $run_idx: $CRASH"
+                CRASH_FOUND=true
+                break
+             fi
+             # Navigate back / background return testing
+             $ADB shell input keyevent 4 # BACK
+             sleep 2
+          done
+
+          if [[ "$CRASH_FOUND" == "true" ]]; then
+             echo "Smoke test failed. Capturing emulator log and screenshot..."
+             cp emulator.log dist/
+             $ADB shell screencap -p /sdcard/screen.png
+             $ADB pull /sdcard/screen.png dist/screen.png
+             $ADB emu kill || true
+             exit 1
           else
              echo "Smoke test passed"
           fi

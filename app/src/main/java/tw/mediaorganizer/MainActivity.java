@@ -29,6 +29,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  private final ExecutorService fileWorker=Executors.newSingleThreadExecutor();
  private volatile boolean dead,busy,fileBusy;private Scanner.Result result;
  private final LinkedHashSet<Scanner.Item> selected=new LinkedHashSet<>();private int mode=0,limit=20;
+ private final Set<Scanner.Group> expandedGroups = new HashSet<>();
  private List<MoveRecord> pending;private boolean undoing;private String destination;private long lastProgress;
  private boolean isDeleting;private List<Scanner.Item> pendingDeletes;
  private final Set<String> sourceFilters=new TreeSet<>();
@@ -352,6 +353,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   busy=b;
   scan.setEnabled(!b&&!fileBusy);
   cancel.setEnabled(b);
+  cancel.setVisibility(b ? View.VISIBLE : View.GONE);
   people.setEnabled(!b);
   bgScan.setEnabled(!b);
   strictness.setEnabled(!b);
@@ -451,8 +453,17 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
              LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.setMargins(0, dp(16), 0, 0);
              empty.addView(desc, lp);
              return new RecyclerView.ViewHolder(empty) {};
-         } else if (viewType == 0) {
-             TextView t = text("", 15); t.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+         } else if (viewType == 0 || viewType == 4 || viewType == 5) {
+             TextView t = text("", 15);
+             t.setLayoutParams(new RecyclerView.LayoutParams(-1, -2));
+             if (viewType == 4 || viewType == 5) {
+                 t.setPadding(dp(16), dp(16), dp(16), dp(16));
+                 t.setTextColor(ACCENT);
+                 t.setTypeface(null, android.graphics.Typeface.BOLD);
+                 android.util.TypedValue outValue = new android.util.TypedValue();
+                 MainActivity.this.getTheme().resolveAttribute(android.R.attr.selectableItemBackground, outValue, true);
+                 t.setBackgroundResource(outValue.resourceId);
+             }
              return new RecyclerView.ViewHolder(t) {};
          } else if (viewType == 1) {
              LinearLayout card = new LinearLayout(MainActivity.this); card.setOrientation(1); card.setPadding(dp(10),dp(9),dp(10),dp(9)); card.setBackgroundColor(CARD);
@@ -496,8 +507,21 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
          if (item.type == 3) {
              LinearLayout v = (LinearLayout)holder.itemView;
              ((TextView)v.getChildAt(1)).setText(item.text);
-         } else if (item.type == 0) {
-             ((TextView)holder.itemView).setText(item.text);
+         } else if (item.type == 0 || item.type == 4 || item.type == 5) {
+             TextView t = (TextView)holder.itemView;
+             t.setText(item.text);
+             t.setOnClickListener(null);
+             if (item.type == 4) {
+                 t.setOnClickListener(v -> {
+                     expandedGroups.add(item.group);
+                     render();
+                 });
+             } else if (item.type == 5) {
+                 t.setOnClickListener(v -> {
+                     limit += 20;
+                     render();
+                 });
+             }
          } else if (item.type == 1) {
              View v = holder.itemView;
              ((TextView)v.findViewById(101)).setText(item.group.title);
@@ -527,9 +551,10 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
                  android.graphics.Bitmap c = thumbCache.get(item.item.thumb.getPath());
                  if (c != null) thumb.setImageBitmap(c);
                  else {
+                     thumb.setTag(item.item.uri.toString());
                      fileWorker.execute(() -> {
                          android.graphics.Bitmap b = smallThumb(item.item.thumb);
-                         if(b!=null) { thumbCache.put(item.item.thumb.getPath(), b); ui(() -> {if(data.get(holder.getAdapterPosition()).item == item.item) thumb.setImageBitmap(b);}); }
+                         if(b!=null) { thumbCache.put(item.item.thumb.getPath(), b); ui(() -> {if(item.item.uri.toString().equals(thumb.getTag())) thumb.setImageBitmap(b);}); }
                      });
                  }
              }
@@ -566,12 +591,13 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
       if(displayed++>=limit)break;
       newData.add(new ListItem(1, group, null, null, false));
       int count=0;
+      boolean expand = expandedGroups.contains(group);
       for(Scanner.Item item:active){
-          if(count++>=12){newData.add(new ListItem(0, null, null, "大型群組：先顯示 12 個，可勾選整組。全部頁面可逐檔查看。", false));break;}
+          if(!expand && count++>=12){newData.add(new ListItem(4, group, null, "大型群組：先顯示 12 個，點擊展開此群組全部檔案。", false));break;}
           newData.add(new ListItem(2, group, item, null, selected.contains(item)));
       }
   }
-  if(displayed>limit) newData.add(new ListItem(0, null, null, "顯示更多群組...", false));
+  if(displayed>limit) newData.add(new ListItem(5, null, null, "顯示更多群組...", false));
   if(displayed==0) {
       newData.add(new ListItem(3, null, null, mode==2?"沒有跨檔案的人物群組。需有清楚正面人臉；人物分析選項須在掃描前啟用。":"此分類尚無符合項目，請嘗試查看其他分類。", false));
   }
@@ -874,6 +900,11 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
                 for (int i = 0; i < deletes.length(); i++) {
                     Scanner.Item item = new Scanner.Item();
                     item.uri = Uri.parse(deletes.getString(i));
+                    boolean exists = false;
+                    try (android.database.Cursor c = getContentResolver().query(item.uri, new String[]{MediaStore.MediaColumns._ID}, null, null, null)) {
+                        if (c != null && c.moveToFirst()) exists = true;
+                    } catch (Exception e) {}
+                    if (!exists) { operationDeleted++; continue; }
                     if (result != null) {
                         for (Scanner.Item existing : result.all) {
                             if (existing.uri.equals(item.uri)) { item = existing; break; }
@@ -881,7 +912,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
                     }
                     pendingDeletes.add(item);
                 }
-                fileBusy = true;
+                if(pendingDeletes.isEmpty()) { pendingDeletes = null; } else { fileBusy = true; }
             }
 
             if (root.has("pending")) {
@@ -895,6 +926,18 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
                     r.oldName = mo.optString("oldName", null);
                     r.newPath = mo.optString("newPath", null);
                     r.newName = mo.optString("newName", null);
+                    boolean exists = false;
+                    try (android.database.Cursor c = getContentResolver().query(r.uri, new String[]{MediaStore.MediaColumns.RELATIVE_PATH}, null, null, null)) {
+                        if (c != null && c.moveToFirst()) {
+                            exists = true;
+                            String currentPath = c.getString(0);
+                            if (r.newPath != null && currentPath != null && r.newPath.equals(currentPath)) {
+                                operationMoved++;
+                                continue;
+                            }
+                        }
+                    } catch (Exception e) {}
+                    if (!exists) { operationFailed++; continue; }
                     if (result != null) {
                         for (Scanner.Item existing : result.all) {
                             if (existing.uri.equals(r.uri)) { r.item = existing; break; }
@@ -902,7 +945,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
                     }
                     pending.add(r);
                 }
-                fileBusy = true;
+                if(pending.isEmpty()) { pending = null; } else { fileBusy = true; }
             }
         } catch (Exception e) {}
     }
@@ -944,6 +987,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   }else{
    result=null;selected.clear();clearThumbs();
   }
+  clearOpState();
   updateSelection();
   render();
  }
@@ -959,6 +1003,8 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  public void onActivityResult(int request,int response,Intent data){super.onActivityResult(request,response,data);
   if(request==51){if(response==RESULT_OK)applyBatch();else{
    status.setText("未獲授權 · 已完成：成功 "+operationMoved+" · 失敗 "+operationFailed+"。未授權之檔案已保留可重試。");
+   pending=null;
+   clearOpState();
    finishMoveOperation();
    operationHasSuccess=false;operationMoved=operationFailed=0;
   }}
@@ -966,6 +1012,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
    status.setText("未獲刪除授權 · 已完成：成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed+"。未授權之檔案已保留。");
    if(operationDeleted>0)saveScanCache(result);
    pendingDeletes=null;
+   clearOpState();
    fileBusy=false;updateSelection();render();
   }}
  }
@@ -981,6 +1028,7 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   }else{
    pendingDeletes=null;
    fileBusy=false;
+   clearOpState();
    saveScanCache(result);
    status.setText("刪除完成 · 成功 "+operationDeleted+" · 失敗 "+operationDeleteFailed);
    render();
@@ -992,8 +1040,9 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   fileWorker.execute(()->{int moved=0,failed=0;List<MoveRecord> successfulRecords=new ArrayList<>();for(MoveRecord r:batch){if(dead)break;try{
     if(r.newPath==null||r.newPath.isEmpty()||(!undoing&&(r.oldPath==null||r.oldPath.isEmpty())))throw new IOException("原資料夾紀錄不完整");String finalName=collision(r.uri,r.newPath,r.newName)?uniqueName(r.newName):r.newName;
     ContentValues values=new ContentValues();values.put(MediaStore.MediaColumns.RELATIVE_PATH,r.newPath);values.put(MediaStore.MediaColumns.DISPLAY_NAME,finalName);
+    if(!undoing){appendJournalPending(r);}
     int updated=getContentResolver().update(r.uri,values,null,null);if(updated!=1)throw new IOException("檔案更新失敗");moved++;
-    if(!undoing){if(!operationHasSuccess){operationHasSuccess=true;}appendJournalPending(r);}
+    if(!undoing){if(!operationHasSuccess){operationHasSuccess=true;}}
     if(undoing){removeJournal(r.uri);}
     if(r.item!=null){r.item.removed=true;}
     successfulRecords.add(r);
@@ -1035,7 +1084,29 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
  private synchronized void promotePendingJournal()throws Exception{
   JSONArray pending = readJournalPending();
   if (pending.length() > 0) {
-   writeJournal(pending);
+   JSONArray valid = new JSONArray();
+   for (int i = 0; i < pending.length(); i++) {
+       JSONObject o = pending.getJSONObject(i);
+       Uri uri = Uri.parse(o.getString("uri"));
+       String expectedPath = o.optString("path", null); // We wait for it to have reached its goal, although pending journal initially records oldPath, we actually need to check if the file moved.
+       // Actually, the requirement says "verify actual file state then commit journal". If we move a file to newPath, we should check if its RELATIVE_PATH matches the expected target.
+       // The pending record records the `oldPath` to undo. The pending move record doesn't record `newPath` explicitly in json, but it is implicitly the operation target.
+       // The easiest way is to check if it has moved from `oldPath`.
+       try (android.database.Cursor c = getContentResolver().query(uri, new String[]{MediaStore.MediaColumns.RELATIVE_PATH}, null, null, null)) {
+           if (c != null && c.moveToFirst()) {
+               String currentPath = c.getString(0);
+               if (expectedPath != null && currentPath != null && !expectedPath.equals(currentPath)) {
+                   valid.put(o);
+               }
+           }
+       } catch (Exception e) {}
+   }
+   if (valid.length() > 0) {
+       writeJournal(valid);
+   } else {
+       File tmp = new File(getFilesDir(), "move-journal-pending.json");
+       if (tmp.exists()) tmp.delete();
+   }
   }
  }
  private synchronized void removeJournal(Uri uri)throws Exception{JSONArray a=readJournal(),next=new JSONArray();for(int i=0;i<a.length();i++)if(!a.getJSONObject(i).getString("uri").equals(uri.toString()))next.put(a.getJSONObject(i));writeJournal(next);}
@@ -1052,7 +1123,14 @@ public class MainActivity extends AppCompatActivity implements ScanService.ScanL
   try(InputStream in=new FileInputStream(cacheFile())){
    ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))>0)out.write(b,0,n);
    JSONObject root=new JSONObject(out.toString("UTF-8"));
-   if(root.has("generation") && root.getLong("generation") != ScanService.getGeneration()){return null;}
+   if(root.has("generation")) {
+       long cacheGen = root.getLong("generation");
+       if(ScanService.getGeneration() == 0) {
+           ScanService.setGeneration(cacheGen);
+       } else if (cacheGen != ScanService.getGeneration()) {
+           return null;
+       }
+   }
    Scanner.Result res=new Scanner.Result();JSONArray all=root.getJSONArray("all");
    for(int i=0;i<all.length();i++){
     JSONObject o=all.getJSONObject(i);Scanner.Item item=new Scanner.Item();item.uri=Uri.parse(o.getString("uri"));item.name=o.optString("name","");item.mime=o.optString("mime",null);item.path=o.optString("path","");item.size=o.optLong("size",0);item.duration=o.optLong("duration",0);item.video=o.optBoolean("video",false);item.removed=o.optBoolean("removed",false);
